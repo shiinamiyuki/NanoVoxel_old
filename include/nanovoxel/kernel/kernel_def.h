@@ -1,0 +1,7 @@
+#ifndef NANOVOXEL_KERNEL_DEF_H
+#define NANOVOXEL_KERNEL_DEF_H
+
+
+
+
+#endif
