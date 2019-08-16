@@ -30,5 +30,6 @@ namespace NanoVoxel {
 			size_t index = i + j * width();
 			return pixelData.at(index);
 		}
+		void writeImage(const std::string& filename);
 	};
 }

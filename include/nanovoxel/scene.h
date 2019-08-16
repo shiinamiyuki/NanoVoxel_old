@@ -5,10 +5,11 @@
 #include <film.h>
 
 namespace NanoVoxel {
+	using RenderCallback = std::function<void(std::shared_ptr<Film>)>;
 	class Scene {
 		std::unique_ptr<CoreCL::Device> device;
 		std::unique_ptr<CoreCL::Context> context;
-		std::unique_ptr<Film> film;
+		std::shared_ptr<Film> film;
 		size_t _width, _height, _depth;
 		std::vector<Material> materials;
 		std::vector<Voxel> world;
@@ -17,8 +18,12 @@ namespace NanoVoxel {
 		struct Buffers {
 			std::unique_ptr<CoreCL::Buffer<Voxel>> world;
 			std::unique_ptr<CoreCL::Buffer<Material>> materials;
+			std::unique_ptr<CoreCL::Buffer<PerRayData>> prd;
+			std::unique_ptr<CoreCL::Buffer<Globals>> globals;
 		}buffers;
 		void createWorld();
+		std::atomic<bool> renderContinuable;
+		size_t kernelWorkSize = 256 * 256;
 	public:
 		Scene(size_t, size_t, size_t);
 		size_t width()const { return _width; }
@@ -39,5 +44,7 @@ namespace NanoVoxel {
 				setFilmSize(w, h);
 			}
 		}
+		void abortRender();
+		void doOneRenderPass(const RenderCallback& callback);
 	};
 }

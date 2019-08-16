@@ -8,7 +8,7 @@
 #include "compat_cpu.h"
 #endif
 
-typedef Float4 Spectrum;
+typedef Float3 Spectrum;
 typedef int Seed;
 
 #endif

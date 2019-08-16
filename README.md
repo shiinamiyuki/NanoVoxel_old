@@ -1,2 +1,6 @@
-# nanovoxel
-GPU accelerated voxel renderer
+# NanoVoxel
+GPU accelerated wave-front voxel renderer
+
+## Features
+
+- Wave-front path tracing

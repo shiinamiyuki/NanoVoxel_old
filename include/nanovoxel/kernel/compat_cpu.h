@@ -5,6 +5,7 @@
 
 
 typedef cl_float4 Float4;
+typedef cl_float3 Float3;
 typedef cl_float2 Float2;
 typedef cl_int2 Int2;
 typedef cl_int3 Int3;
@@ -17,8 +18,12 @@ inline Float4 __makeFloat4(Float x, Float y, Float z, Float w) {
     return float4;
 }
 
-inline Float4 __makeFloat3(Float x, Float y, Float z) {
-    return __makeFloat4(x, y, z, 0);
+inline Float3 __makeFloat3(Float x, Float y, Float z) {
+	Float3 float3;
+	float3.x = x;
+	float3.y = y;
+	float3.z = z;
+	return float3;
 }
 
 inline Float2 __makeFloat2(Float x, Float y) {
