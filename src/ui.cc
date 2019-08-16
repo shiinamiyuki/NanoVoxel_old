@@ -55,9 +55,9 @@ namespace NanoVoxel {
 		}
 		IMGUI_CHECKVERSION();
 		ImGui::CreateContext();
-		ImGuiIO& io = ImGui::GetIO(); (void)io; ImGui::StyleColorsDark();
-		//ImGui::StyleColorsClassic();
-		ImGui::StyleColorsLight();
+		ImGuiIO& io = ImGui::GetIO(); (void)io;
+		ImGui::StyleColorsDark();
+		//ImGui::StyleColorsLight();
 
 		// Setup Platform/Renderer bindings
 		ImGui_ImplGlfw_InitForOpenGL(windowHandle, true);
@@ -65,6 +65,7 @@ namespace NanoVoxel {
 		io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/Consola.ttf", 16.0f);
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
+		loadDefault();
 
 	}
 	void Window::show() {
@@ -141,9 +142,11 @@ namespace NanoVoxel {
 		ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
 		ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 		ImGui::End();
+
 	}
 	void Window::update() {
 		setUpDockSpace();
+		menu();
 		viewportWindow();
 		ImGui::ShowDemoWindow();
 	}
@@ -158,10 +161,15 @@ namespace NanoVoxel {
 			loadViewImpl();
 			windowFlags.viewportUpdateAvailable = false;
 		}
+		struct WindowCloser {
+			~WindowCloser() {
+				ImGui::End();
+			}
+		};
 		if (ImGui::Begin("View")) {
+			WindowCloser _;
 			if (!viewport)return;
 			Draw(*viewport);
-			ImGui::End();
 		}
 	}
 
@@ -181,5 +189,20 @@ namespace NanoVoxel {
 		});
 		windowFlags.viewportUpdateAvailable = true;
 		viewportUpdateFilm = film;
+	}
+
+	void Window::menu() {
+		if (ImGui::BeginMainMenuBar()) {
+			if (ImGui::BeginMenu("File")) {
+				if (ImGui::MenuItem("New")) {
+					loadDefault();
+				}
+				ImGui::EndMenu();
+			}
+			ImGui::EndMainMenuBar();
+		}
+	}
+	void Window::loadDefault() {
+		scene = std::make_unique<Scene>(50, 50, 50);
 	}
 }

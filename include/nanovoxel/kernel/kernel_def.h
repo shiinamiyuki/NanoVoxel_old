@@ -13,12 +13,12 @@ typedef struct knl_packed Voxel {
 	MaterialIdType materialId;
 }Voxel;
 
-enum MaterialType {
+typedef enum MaterialType {
 	EDiffuse,
 	EDisney,
 	ESpecular,
 	EGlossy, 
-};
+}MaterialType;
 
 typedef struct knl_packed Texture {
 	Spectrum value;

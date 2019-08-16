@@ -9,6 +9,7 @@ int main(int argc, char** argv) {
 		Window window;
 		window.create(argc, argv);
 		window.show();
+
 	}
 	catch (std::exception& e) {
 		std::cerr << e.what() << std::endl;

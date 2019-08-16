@@ -4,6 +4,7 @@
 typedef float4 Float4;
 typedef float2 Float2;
 typedef int2 Int2;
+typedef int3 Int3;
 typedef float Float;
 #define makeFloat4(x, y, z, w) (float4)(x,y,z, w)
 #define makeFloat2(x, y) (float2)(x,y)
@@ -16,5 +17,7 @@ typedef float Float;
 
 
 #define knl_packed __attribute__((packed)) 
+#define NANOVOXEL_NS_BEGIN
+#define NANOVOXEL_NS_END
 #endif
 #endif 

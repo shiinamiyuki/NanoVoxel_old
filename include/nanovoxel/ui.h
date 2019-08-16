@@ -27,6 +27,8 @@ namespace NanoVoxel {
 		void loadViewImpl();
 		std::shared_ptr<Film> viewportUpdateFilm;
 		std::unique_ptr<Scene> scene;
+		void menu();
+		void loadDefault();
 	public:
 		struct WindowFlags {
 			bool viewportUpdateAvailable;

@@ -58,100 +58,93 @@ namespace NanoVoxel {
 
 		class MemObject {
 		protected:
-			cl_mem object;
-			bool allocated;
+			cl_mem object = nullptr;
+			MemObject() {}
 		public:
-			MemObject() { allocated = false; }
-
 			const cl_mem* getBuffer() const { return &object; }
 
-			virtual void release() { clReleaseMemObject(object); }
-
-			virtual ~MemObject() {}
+			virtual ~MemObject() { if(object)clReleaseMemObject(object); }
 		};
 
 		class _Buffer : public MemObject {
-
+		protected:
+			Context* context;
 		public:
-			_Buffer() : MemObject() {}
+			_Buffer(Context*, cl_mem_flags flag, size_t size, void* hostPtr = nullptr);
 
-			void create(Context*, cl_mem_flags flag, size_t size, void* hostPtr = nullptr);
+			void write(size_t size, void* buffer);
 
-			void write(Context*, size_t size, void* buffer);
-
-			void read(Context*, size_t size, void* buffer);
+			void read(size_t size, void* buffer);
 		};
-
+		class _SVM {
+			void* data = nullptr;
+			Context* context;
+		public:
+			void* getData()const { return data; }
+			_SVM(Context* context, cl_svm_mem_flags flags, size_t size, cl_uint align = 0) :context(context) {
+				data = clSVMAlloc(context->getContext(), flags, size, align);
+				if (!data) {
+					throw CoreCL::MemoryAllocationError("Cannot alloc svm");
+				}
+			}
+			virtual ~_SVM() {
+				clSVMFree(context->getContext(), data);
+			}
+		};
+		template<class T>
+		class SVM:public _SVM {
+		public:
+			SVM(Context* context, cl_svm_mem_flags flags, size_t size, cl_uint align = 0)
+				:_SVM(context, flags, size * sizeof(T), align) {}
+		};
 		template<typename T>
 		class Buffer : public _Buffer {
 		public:
-			Buffer() : _Buffer() {}
+			Buffer(Context* ctx, cl_mem_flags flag, size_t N, T* hostPtr = nullptr)
+				: _Buffer(ctx, flag, sizeof(T)* N, hostPtr) {}
 
-			bool create(Context* ctx, cl_mem_flags flag, size_t N, T* hostPtr = nullptr) {
-				return _Buffer::create(ctx, flag, sizeof(T) * N, hostPtr);
+			void write(size_t N, T* buffer) {
+				_Buffer::write(sizeof(T) * N, buffer);
 			}
 
-			void write(Context* ctx, size_t N, T* buffer) {
-				_Buffer::write(ctx, sizeof(T) * N, buffer);
+			void read( size_t N, T* buffer) {
+				_Buffer::read(sizeof(T) * N, buffer);
 			}
-
-			void read(Context* ctx, size_t N, T* buffer) {
-				_Buffer::read(ctx, sizeof(T) * N, buffer);
-			}
-		};
-
-		class Image : public MemObject {
-		public:
-			bool create(Context*,
-				cl_mem_flags flag,
-				const cl_image_format* format,
-				const cl_image_desc* desc, void* hostPtr);
 		};
 
 		struct Kernel {
+		private:
 			cl_program program;
 			cl_kernel kernel;
-			bool succ;
+			bool succ = false;
 			Context* ctx;
+		public:
 			unsigned int globalWorkSize, localWorkSize;
 
-			Kernel() : ctx(nullptr) {}
-
-			void setContext(Context* c) { ctx = c; }
+			Kernel(Context* ctx) : ctx(ctx) {}
 
 			void setWorkDimesion(unsigned int g, unsigned int l) {
 				globalWorkSize = g;
 				localWorkSize = l;
 			}
-
+		private:
 			void buildProgram(const char* src, size_t size, const char* option);
 
 			void loadProgram(const char* filename, const char* option = nullptr);
-
-			void createKernel(const char* file, const char* ker, const char* option = nullptr);
+		public:
+			void createKernel(const char* file, const char* ker, const char* option = "");
+			void createKernelFromSource(const std::string& name,const std::string& s, const char* option = "");
 
 			void operator()();
 
 			void setArg(const _Buffer& buffer, int i);
+			void setArg(uint32_t* data, int i);
+			void setArg(const _SVM& buffer, int i);
 
-			void operator()(const _Buffer& buffer) { setArg(buffer, 0); }
 
-			void setArgV(int i, const _Buffer& buffer) {
-				setArg(buffer, i);
-			}
+		private:
 
-			template<typename... Arg>
-			void setArgV(int i, const _Buffer& buffer, Arg... arg) {
-				setArg(buffer, i);
-				setArgV(i + 1, arg...);
-			}
 
-			template<typename... Arg>
-			void operator()(const _Buffer& buffer, Arg... arg) {
-				setArg(buffer, 0);
-				setArgV(1, arg...);
-				(*this)();
-			}
 		};
 
 		const char* getErrorString(int errorCode);

@@ -16,8 +16,7 @@ namespace NanoVoxel {
 			return nullptr;
 		}
 
-		void _Buffer::create(Context* ctx, cl_mem_flags flag, size_t size, void* hostPtr) {
-			if (allocated) { release(); }
+		_Buffer::_Buffer(Context* ctx, cl_mem_flags flag, size_t size, void* hostPtr) : MemObject() {
 			cl_int ret;
 			object = clCreateBuffer(ctx->getContext(),
 				flag,
@@ -26,16 +25,16 @@ namespace NanoVoxel {
 			if (ret != CL_SUCCESS) {
 				throw MemoryAllocationError("Failed to allocated buffer: {}\n", getErrorString(ret));
 			}
-			allocated = true;
+			context = ctx;
 		}
 
-		void CoreCL::_Buffer::write(Context* ctx, size_t size, void* buffer) {
-			clEnqueueWriteBuffer(ctx->getCommandQueue(), object, CL_TRUE, 0,
+		void CoreCL::_Buffer::write(size_t size, void* buffer) {
+			clEnqueueWriteBuffer(context->getCommandQueue(), object, CL_TRUE, 0,
 				size, buffer, 0, nullptr, nullptr);
 		}
 
-		void CoreCL::_Buffer::read(Context* ctx, size_t size, void* buffer) {
-			clEnqueueReadBuffer(ctx->getCommandQueue(), object, CL_TRUE, 0,
+		void CoreCL::_Buffer::read(size_t size, void* buffer) {
+			clEnqueueReadBuffer(context->getCommandQueue(), object, CL_TRUE, 0,
 				size, buffer, 0, nullptr, nullptr);
 		}
 		class GenericDevice : public Device {
@@ -113,7 +112,26 @@ namespace NanoVoxel {
 				throw ContextCreationError("cannot create command queue, error: {}\n", getErrorString(ret));
 			}
 		}
-
+		void Kernel::createKernel(const char* file, const char* ker, const char* option) {
+			succ = false;
+			fmt::print("Creating kernel {}::{}\n", file, ker);
+			loadProgram(file, option);
+			cl_int ret;
+			kernel = clCreateKernel(program, ker, &ret);
+			if (ret != CL_SUCCESS) {
+				throw ContextCreationError("error creating kernel {} \n", getErrorString(ret));
+			}
+			succ = true;
+		}
+		void Kernel::createKernelFromSource(const std::string& name, const std::string& s, const char* option) {
+			buildProgram(s.c_str(), s.length(), option);
+			cl_int ret;
+			kernel = clCreateKernel(program, name.c_str(), &ret);
+			if (ret != CL_SUCCESS) {
+				throw ContextCreationError("error creating kernel {} \n", getErrorString(ret));
+			}
+			succ = true;
+		}
 		void Kernel::buildProgram(const char* src, size_t size, const char* option) {
 			cl_int ret;
 			program = clCreateProgramWithSource(ctx->getContext(), 1,
@@ -122,7 +140,7 @@ namespace NanoVoxel {
 				throw ContextCreationError("cannot create program, error: {}", getErrorString(ret));
 			}
 			auto device = ctx->getDevice();
-			std::string optStr = "-I. -cl-single-precision-constant -Werror";
+			std::string optStr = "-I. -cl-single-precision-constant -Werror ";
 			optStr += option;
 			ret = clBuildProgram(program, 1, &device->getDevice(),
 				optStr.c_str(),
@@ -155,19 +173,10 @@ namespace NanoVoxel {
 			source_size = fread(source_str, 1, MAX_SOURCE_SIZE, fp);
 			fclose(fp);
 			buildProgram(source_str, source_size, option);
+			free(source_str);
 		}
 
-		void Kernel::createKernel(const char* file, const char* ker, const char* option) {
-			succ = false;
-			fmt::print("Creating kernel {}::{}\n", file, ker);
-			loadProgram(file, option);
-			cl_int ret;
-			kernel = clCreateKernel(program, ker, &ret);
-			if (ret != CL_SUCCESS) {
-				throw ContextCreationError("error creating kernel {} \n", getErrorString(ret));
-			}
-			succ = true;
-		}
+	
 
 		void CoreCL::Kernel::operator()() {
 			if (!this->succ)return;
@@ -184,23 +193,23 @@ namespace NanoVoxel {
 		}
 
 		void CoreCL::Kernel::setArg(const _Buffer& buffer, int i) {
-			clSetKernelArg(kernel, i, sizeof(cl_mem), buffer.getBuffer());
-		}
-
-		bool CoreCL::Image::create(Context* ctx, cl_mem_flags flag, const cl_image_format* format, const cl_image_desc* desc,
-			void* hostPtr) {
-			if (allocated) { release(); }
-			cl_int ret;
-			object = clCreateImage(ctx->getContext(),
-				flag, format, desc, hostPtr, &ret);
+			auto ret = clSetKernelArg(kernel, i, sizeof(cl_mem), buffer.getBuffer());
 			if (ret != CL_SUCCESS) {
-				throw ContextCreationError("Failed to allocated buffer: {}\n", getErrorString(ret));
+				throw ContextCreationError("Cannot set arg{} {}\n",i, getErrorString(ret));
 			}
-			allocated = true;
-			return true;
 		}
-
-
+		void CoreCL::Kernel::setArg(uint32_t* data, int i) {
+			auto ret = clSetKernelArg(kernel, i, sizeof(uint32_t), (void*)data);
+			if (ret != CL_SUCCESS) {
+				throw ContextCreationError("Cannot set arg{} {}\n", i, getErrorString(ret));
+			}		
+		}
+		void  CoreCL::Kernel::setArg(const _SVM& buffer, int i) {
+			auto ret = clSetKernelArgSVMPointer(kernel, i, buffer.getData());
+			if (ret != CL_SUCCESS) {
+				throw ContextCreationError("Cannot set arg{} {}\n", i, getErrorString(ret));
+			}
+		}
 		const char* NanoVoxel::CoreCL::getErrorString(int errorCode) {
 			switch (errorCode) {
 				// run-time and JIT compiler errors
