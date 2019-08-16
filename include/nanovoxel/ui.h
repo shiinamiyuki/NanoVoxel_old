@@ -1,11 +1,12 @@
 #pragma once
 
 
-#include <util.h>
-
+#include <miyuki/miyuki.h>
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
-
+#include <miyuki/hw/texture.h>
+#include <film.h>
+#include <scene.h>
 namespace NanoVoxel {
 	class AbstractWindow {
 	public:
@@ -19,7 +20,19 @@ namespace NanoVoxel {
 	class Window : AbstractWindow {
 		GLFWwindow* windowHandle = nullptr;
 		void update();
+		std::unique_ptr<Miyuki::HW::Texture> viewport;
+		void viewportWindow();
+		std::vector<uint8_t> pixelData;
+		std::mutex viewportMutex;
+		void loadViewImpl();
+		std::shared_ptr<Film> viewportUpdateFilm;
+		std::unique_ptr<Scene> scene;
 	public:
+		struct WindowFlags {
+			bool viewportUpdateAvailable;
+			WindowFlags() :viewportUpdateAvailable(false) {}
+		}windowFlags;
+		void loadView(std::shared_ptr<Film>film);
 		void create(int argc, char** argv);
 		void show();
 	};

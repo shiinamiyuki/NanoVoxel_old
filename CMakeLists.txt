@@ -19,13 +19,16 @@ link_libraries(glfw3 opengl32 OpenCL)
 file(GLOB thirdpartySRC
         "include/fmt/format.cc"
         "include/fmt/posix/cc"
+		"include/lodepng/lodepng.cpp"
 		)
 file(GLOB guiSRC
 	"include/imgui/*.c"
 	"include/imgui/*.cpp")
-
+file(GLOB_RECURSE mykSRC
+	"include/miyuki/*.cc")
 # Add source to this project's executable.
-add_executable (nanovoxel  "src/main.cc" "src/corecl.cc" "src/scene.cc" "src/ui.cc" ${guiSRC} ${thirdpartySRC})
+add_executable (nanovoxel  "src/main.cc" "src/corecl.cc" "src/scene.cc" "src/ui.cc" 
+${mykSRC} ${guiSRC} ${thirdpartySRC})
 
 add_custom_command(TARGET nanovoxel PRE_BUILD
                    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/nanovoxel/kernel
