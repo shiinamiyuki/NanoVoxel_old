@@ -1,28 +1,59 @@
 #pragma once
 #include <CL/cl.h>
 #include <string>
+#include <memory>
+#include <stdexcept>
 namespace NanoVoxel {
 	namespace CoreCL {
+		class ContextCreationError : public std::runtime_error {
+		public:
+			using std::runtime_error::runtime_error;
+			template<class... Args>
+			ContextCreationError(const char* fmt, Args&& ... args)
+				:std::runtime_error(fmt::format(fmt, args...)) {}
+		};
+		class MemoryAllocationError : public std::runtime_error {
+		public:
+			using std::runtime_error::runtime_error;
+			template<class... Args>
+			MemoryAllocationError(const char* fmt, Args&& ... args)
+				:std::runtime_error(fmt::format(fmt, args...)) {}
+		};
 		cl_platform_id findPlatformContains(const std::string& s, cl_platform_id* list, int N);
-
+		class Device {
+		public:
+			virtual cl_device_id& getDevice() = 0;
+			virtual cl_platform_id& getPlatform() = 0;
+			virtual ~Device() = default;
+		};
+		std::unique_ptr<Device> CreateCPUDevice();
+		std::unique_ptr<Device> CreateGPUDevice();
 		class Context {
 			cl_context context;
 			cl_command_queue commandQueue;
 			cl_platform_id platform;
-			cl_device_id device;
+			Device* device = nullptr;
 		public:
 			void create();
 
 		public:
+			Context(Device* device) :device(device) { create(); }
+			Context(const Context& rhs) {
+				clRetainCommandQueue(rhs.commandQueue);
+				commandQueue = rhs.commandQueue;
+				device = rhs.device;
+				platform = rhs.platform;
+				context = rhs.context;
+				clRetainContext(context);
+			}
 			cl_context getContext() const { return context; }
 
-			cl_device_id getDevice() const { return device; }
+			Device* getDevice() const { return device; }
 
 			cl_platform_id getPlatform() const { return platform; }
 
 			cl_command_queue getCommandQueue() const { return commandQueue; }
-
-			Context() { create(); }
+			~Context();
 		};
 
 		class MemObject {
@@ -44,7 +75,7 @@ namespace NanoVoxel {
 		public:
 			_Buffer() : MemObject() {}
 
-			bool create(Context*, cl_mem_flags flag, size_t size, void* hostPtr = nullptr);
+			void create(Context*, cl_mem_flags flag, size_t size, void* hostPtr = nullptr);
 
 			void write(Context*, size_t size, void* buffer);
 

@@ -6,8 +6,8 @@
 #else
 // just for IDE to check the code
 #include "compat_cpu.h"
-#pragma pack(push,1)
 #endif
+
 typedef Float4 Spectrum;
 typedef int Seed;
 

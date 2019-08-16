@@ -16,7 +16,7 @@ namespace NanoVoxel {
 			return nullptr;
 		}
 
-		bool _Buffer::create(Context* ctx, cl_mem_flags flag, size_t size, void* hostPtr) {
+		void _Buffer::create(Context* ctx, cl_mem_flags flag, size_t size, void* hostPtr) {
 			if (allocated) { release(); }
 			cl_int ret;
 			object = clCreateBuffer(ctx->getContext(),
@@ -24,11 +24,9 @@ namespace NanoVoxel {
 				size,
 				hostPtr, &ret);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "Failed to allocated buffer: {}\n", getErrorString(ret));
-				return false;
+				throw MemoryAllocationError("Failed to allocated buffer: {}\n", getErrorString(ret));
 			}
 			allocated = true;
-			return true;
 		}
 
 		void CoreCL::_Buffer::write(Context* ctx, size_t size, void* buffer) {
@@ -40,47 +38,79 @@ namespace NanoVoxel {
 			clEnqueueReadBuffer(ctx->getCommandQueue(), object, CL_TRUE, 0,
 				size, buffer, 0, nullptr, nullptr);
 		}
+		class GenericDevice : public Device {
+			cl_device_id device_id;
+			cl_platform_id platform_id = nullptr;
+			int type;
+		public:
+			GenericDevice(int type):type(type) {
+			
+			}
+			virtual cl_device_id& getDevice()override {
+				return device_id;
+			}
+			virtual cl_platform_id& getPlatform()override {
+				return platform_id;
+			}
+			void init() {
+				cl_platform_id platform_list[10];
+				device_id = nullptr;
+				cl_uint ret_num_devices;
+				cl_uint ret_num_platforms;
+				cl_int ret = clGetPlatformIDs(10, platform_list, &ret_num_platforms);
 
-		void Context::create() {
-			fmt::print("Creating OpenCL Context\n");
-			cl_platform_id platform_id = nullptr, platform_list[10];
-			cl_device_id device_id = nullptr;
-			cl_uint ret_num_devices;
-			cl_uint ret_num_platforms;
-			cl_int ret = clGetPlatformIDs(10, platform_list, &ret_num_platforms);
 
-
-			if ((platform_id = CoreCL::findPlatformContains("NVidia", platform_list, 10)) == nullptr) {
-				if ((platform_id = CoreCL::findPlatformContains("AMD", platform_list, 10)) == nullptr) {
-					if ((platform_id = CoreCL::findPlatformContains("Intel", platform_list, 10)) == nullptr) {
-						fmt::print(stderr, "no available platform\n", 0);
+				if ((platform_id = CoreCL::findPlatformContains("NVidia", platform_list, 10)) == nullptr) {
+					if ((platform_id = CoreCL::findPlatformContains("AMD", platform_list, 10)) == nullptr) {
+						if ((platform_id = CoreCL::findPlatformContains("Intel", platform_list, 10)) == nullptr) {
+							throw ContextCreationError("no available platform\n");
+						}
 					}
 				}
-			}
 
-			ret = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1,
-				&device_id, &ret_num_devices);
-			char* m = new char[1024];
-			clGetDeviceInfo(device_id, CL_DEVICE_NAME, sizeof(char) * 1024, m, nullptr);
-			fmt::print("Device: {}\n", m);
-			delete[]m;
-			platform = platform_id;
-			device = device_id;
+				ret = clGetDeviceIDs(platform_id, type, 1,
+					&device_id, &ret_num_devices);
+				if (ret != CL_SUCCESS) {
+					throw ContextCreationError("cannot get device id, error: {}\n", getErrorString(ret));
+				}
+				char* m = new char[1024];
+				clGetDeviceInfo(device_id, CL_DEVICE_NAME, sizeof(char) * 1024, m, nullptr);
+				fmt::print("Device: {}\n", m);
+				delete[]m;
+				
+			}
+		};
+		std::unique_ptr<Device> CreateCPUDevice() {
+			auto device = std::make_unique<GenericDevice>(CL_DEVICE_TYPE_CPU);
+			device->init();
+			return std::move(device);
+		}
+		std::unique_ptr<Device> CreateGPUDevice() {
+			auto device = std::make_unique<GenericDevice>(CL_DEVICE_TYPE_GPU);
+			device->init();
+			return std::move(device);
+		}
+		void Context::create() {
+			fmt::print("Creating OpenCL Context\n");
+			cl_int ret;
 			context = clCreateContext(nullptr,
 				1,
-				&device_id,
+				&device->getDevice(),
 				nullptr,
-				nullptr,
-				&ret);
-
-			// Create a command queue
-			commandQueue = clCreateCommandQueueWithProperties(
-				context,
-				device_id,
 				nullptr,
 				&ret);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "cannot create command queue, error: {}", getErrorString(ret));
+				throw ContextCreationError("cannot create command queue, error: {}\n", getErrorString(ret));
+			}
+			
+			// Create a command queue
+			commandQueue = clCreateCommandQueueWithProperties(
+				context,
+				device->getDevice(),
+				nullptr,
+				&ret);
+			if (ret != CL_SUCCESS) {
+				throw ContextCreationError("cannot create command queue, error: {}\n", getErrorString(ret));
 			}
 		}
 
@@ -89,27 +119,29 @@ namespace NanoVoxel {
 			program = clCreateProgramWithSource(ctx->getContext(), 1,
 				(const char**)& src, (const size_t*)& size, &ret);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "cannot create program, error: {}", getErrorString(ret));
-				return;
+				throw ContextCreationError("cannot create program, error: {}", getErrorString(ret));
 			}
 			auto device = ctx->getDevice();
 			std::string optStr = "-I. -cl-single-precision-constant -Werror";
 			optStr += option;
-			ret = clBuildProgram(program, 1, &device,
+			ret = clBuildProgram(program, 1, &device->getDevice(),
 				optStr.c_str(),
 				nullptr, nullptr);
 			if (ret != CL_SUCCESS) {
 				fmt::print(stderr, "Program Build failed\n");
 				size_t length;
 				char buffer[40960];
-				clGetProgramBuildInfo(program, ctx->getDevice(),
+				clGetProgramBuildInfo(program, ctx->getDevice()->getDevice(),
 					CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &length);
-				fmt::print(stderr, "\"--- Build log ---\n{0}\n", buffer);
+				throw ContextCreationError("\"--- Build log ---\n{0}\n", buffer);
 			}
 		}
 
 #define MAX_SOURCE_SIZE 100000
-
+		Context::~Context() {
+			clReleaseCommandQueue(commandQueue);
+			clReleaseContext(context);
+		}
 		void Kernel::loadProgram(const char* filename, const char* option) {
 			FILE* fp;
 			char* source_str;
@@ -117,8 +149,7 @@ namespace NanoVoxel {
 
 			fp = fopen(filename, "r");
 			if (!fp) {
-				fmt::print(stderr, "Failed to load kernel \"{}\".\n", filename);
-				return;
+				throw ContextCreationError("Failed to load kernel \"{}\".\n", filename);
 			}
 			source_str = (char*)malloc(MAX_SOURCE_SIZE);
 			source_size = fread(source_str, 1, MAX_SOURCE_SIZE, fp);
@@ -133,8 +164,7 @@ namespace NanoVoxel {
 			cl_int ret;
 			kernel = clCreateKernel(program, ker, &ret);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "error creating kernel {} \n", getErrorString(ret));
-				return;
+				throw ContextCreationError("error creating kernel {} \n", getErrorString(ret));
 			}
 			succ = true;
 		}
@@ -148,7 +178,7 @@ namespace NanoVoxel {
 			cl_int ret = clEnqueueNDRangeKernel(ctx->getCommandQueue(), kernel, 1, nullptr,
 				&global_item_size, &local_item_size, 0, nullptr, nullptr);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "Cannot Enqueue NDRangeKernel error: {}\n", getErrorString(ret));
+				throw ContextCreationError("Cannot Enqueue NDRangeKernel error: {}\n", getErrorString(ret));
 			}
 			clFinish(ctx->getCommandQueue());
 		}
@@ -164,8 +194,7 @@ namespace NanoVoxel {
 			object = clCreateImage(ctx->getContext(),
 				flag, format, desc, hostPtr, &ret);
 			if (ret != CL_SUCCESS) {
-				fmt::print(stderr, "Failed to allocated buffer: {}\n", getErrorString(ret));
-				return false;
+				throw ContextCreationError("Failed to allocated buffer: {}\n", getErrorString(ret));
 			}
 			allocated = true;
 			return true;

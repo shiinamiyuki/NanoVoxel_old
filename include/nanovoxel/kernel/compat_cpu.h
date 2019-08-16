@@ -2,11 +2,12 @@
 #define NANOVOXEL_COMPAT_CPU_H
 
 #include <CL/cl.h>
-#include "../core/math.hpp"
+
 
 typedef cl_float4 Float4;
 typedef cl_float2 Float2;
 typedef cl_int2 Int2;
+typedef cl_int3 Int3;
 typedef float Float;
 inline Float4 __makeFloat4(Float x, Float y, Float z, Float w) {
     Float4 float4;
@@ -37,5 +38,6 @@ inline Float2 __makeFloat2(Float x, Float y) {
 #define knl_entry
 
 #define knl_packed
-
+#define NANOVOXEL_NS_BEGIN namespace NanoVoxel{__pragma(pack(push, 1))
+#define NANOVOXEL_NS_END __pragma(pack(pop))  }
 #endif 
