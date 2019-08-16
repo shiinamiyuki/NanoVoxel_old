@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
 		Scene scene(50, 50, 50);
 		scene.setFilmSize(500, 500);
 		scene.commit();
+		for(int i =0;i<10;i++)
 		scene.doOneRenderPass([](std::shared_ptr<Film>) {});
 
 	}

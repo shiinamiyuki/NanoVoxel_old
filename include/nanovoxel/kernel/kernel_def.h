@@ -48,10 +48,20 @@ typedef struct knl_packed Material {
 	};
 }Material;
 
+
+typedef unsigned int RNG;
+
+inline float lcg_rng(knl_global RNG* rng) {
+	*rng = (1103515245 * (*rng) + 12345);
+	return (float)* rng / (float)0xFFFFFFFF;
+}
+
+
 typedef struct knl_packed PerRayData {
 	Int2 pixel;
 	bool done; bool valid;
 	Spectrum radiance, beta;
+	RNG rng;
 #ifndef OPENCL_KERNEL
 	PerRayData() :done(false), valid(false) {}
 #endif
@@ -90,7 +100,12 @@ typedef struct knl_packed BoundBox {
 
 typedef struct knl_packed Intersection {
 	Float3 hitpoint;
+	Float3 normal;
+	float distance;
 }Intersection;
+
+
+
 
 NANOVOXEL_NS_END
 

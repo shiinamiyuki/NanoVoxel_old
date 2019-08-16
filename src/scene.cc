@@ -12,7 +12,7 @@ namespace NanoVoxel {
 					auto x = i - 25;
 					auto y = j - 25;
 					auto z = k - 25;
-					if (std::sqrt(x * x + y * y + z * z) <= 25)
+					if (std::sqrt(x * x + y * y + z * z) <= 20)
 						getVoxel(i, j, k).setMat(0);
 				}
 			}
@@ -27,7 +27,7 @@ namespace NanoVoxel {
 		createWorld();
 	}
 	void Scene::createOpenCLContext() {
-		device = CoreCL::CreateCPUDevice();
+		device = CoreCL::CreateGPUDevice();
 		context = std::make_unique<CoreCL::Context>(device.get());
 		kernel = std::make_unique<CoreCL::Kernel>(context.get());
 		kernel->createKernel("kernel/kernel.cc", "NanoVoxelMain", "-DOPENCL_KERNEL");
@@ -54,6 +54,8 @@ namespace NanoVoxel {
 		prd.valid = false;
 		return prd;
 	}
+	static std::random_device rd;
+	static std::uniform_int_distribution<unsigned int> dist;
 	void Scene::doOneRenderPass(const RenderCallback& callback) {
 		fmt::print("Start\n");
 		renderContinuable = true;
@@ -84,6 +86,7 @@ namespace NanoVoxel {
 						prd.radiance.x = 0;
 						prd.radiance.y = 0;
 						prd.radiance.z = 0;
+						prd.rng = dist(rd);
 						queue.push_back(prd);
 					}
 				}
