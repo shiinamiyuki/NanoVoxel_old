@@ -7,6 +7,7 @@
 #include <miyuki/hw/texture.h>
 #include <film.h>
 #include <scene.h>
+#include <boost/optional.hpp>
 namespace NanoVoxel {
 	class AbstractWindow {
 	public:
@@ -29,12 +30,21 @@ namespace NanoVoxel {
 		std::unique_ptr<Scene> scene;
 		void menu();
 		void loadDefault();
+		boost::optional<Point2i> lastViewportMouseDown;
+		Vec3f cameraDir, cameraPos;
+		boost::optional<Vec3f> center;
+		float distance = -1;
+		enum CameraMode {
+			EPerspective,
+			EFree
+		};
+		CameraMode cameraMode = EPerspective;
 	public:
 		struct WindowFlags {
 			bool viewportUpdateAvailable;
 			WindowFlags() :viewportUpdateAvailable(false) {}
 		}windowFlags;
-		void loadView(std::shared_ptr<Film>film);
+		void loadView(std::shared_ptr<Film>film, bool noDiscard = false);
 		void create(int argc, char** argv);
 		void show();
 	};

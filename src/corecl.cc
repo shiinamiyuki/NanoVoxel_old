@@ -189,7 +189,9 @@ namespace NanoVoxel {
 			if (ret != CL_SUCCESS) {
 				throw ContextCreationError("Cannot Enqueue NDRangeKernel error: {}\n", getErrorString(ret));
 			}
-			clFinish(ctx->getCommandQueue());
+			if (clFinish(ctx->getCommandQueue()) != CL_SUCCESS) {
+				throw ContextCreationError("Cannot Wait for Command Queue error: {}\n", getErrorString(ret));
+			}
 		}
 
 		void CoreCL::Kernel::setArg(const _Buffer& buffer, int i) {

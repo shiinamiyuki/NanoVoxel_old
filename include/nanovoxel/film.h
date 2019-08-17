@@ -31,5 +31,11 @@ namespace NanoVoxel {
 			return pixelData.at(index);
 		}
 		void writeImage(const std::string& filename);
+		void clear() {
+			for (auto& i : pixelData) {
+				i.color = {};
+				i.weight = 0;
+			}
+		}
 	};
 }

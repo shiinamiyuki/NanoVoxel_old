@@ -4,24 +4,23 @@
 #include <filesystem>
 using namespace NanoVoxel;
 
-struct CurrentPathSaver {
-	std::filesystem::path current;
-	CurrentPathSaver() :current(std::filesystem::current_path()) {}
-	~CurrentPathSaver() {
-		std::filesystem::current_path(current);
-	}
-};
 
 int main(int argc, char** argv) {
 	try {
-	/*	Window window;
+		Window window;
 		window.create(argc, argv);
-		window.show();*/
-		Scene scene(50, 50, 50);
-		scene.setFilmSize(500, 500);
+		window.show();
+		/*Scene scene(50, 50, 50);
+		scene.setFilmSize(1000, 1000);
+		scene.camera.position = Miyuki::Vec3f(25, 30, -30);
 		scene.commit();
-		for(int i =0;i<10;i++)
-		scene.doOneRenderPass([](std::shared_ptr<Film>) {});
+		for (int i = 0; i < 32; i++) {
+			scene.doOneRenderPass([=](std::shared_ptr<Film>film) {
+				if (i == 31) {
+					film->writeImage("out.png");
+				}
+			});
+		}*/
 
 	}
 	catch (std::exception& e) {

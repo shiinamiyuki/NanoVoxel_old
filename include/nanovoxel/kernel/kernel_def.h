@@ -67,12 +67,16 @@ typedef struct knl_packed PerRayData {
 #endif
 }PerRayData;
 
-
+typedef struct knl_packed Mat4x4 {
+	Float4 m[4];
+}Mat4x4;
 
 typedef struct knl_packed Globals {
 	Int3 dimension;
 	int tileSize;
 	Int2 filmDimension;
+	Float3 cameraPos;
+	Mat4x4 cameraT;
 	knl_global const Voxel* voxels;
 	knl_global const Material* materials;
 	knl_global PerRayData* prd;

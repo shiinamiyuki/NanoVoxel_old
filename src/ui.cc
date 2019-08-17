@@ -72,7 +72,7 @@ namespace NanoVoxel {
 
 		ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 		while (!glfwWindowShouldClose(windowHandle)) {
-		
+
 
 			glfwPollEvents();
 
@@ -173,22 +173,36 @@ namespace NanoVoxel {
 		}
 	}
 
-	void Window::loadView(std::shared_ptr<Film> film) {
-		std::lock_guard<std::mutex> lock(viewportMutex);
-		size_t w = film->width(), h = film->height();
-		pixelData.resize(w * h * 4ul);
-		Miyuki::Thread::ParallelFor(0, h, [=](int j, int) {
-			for (int i = 0; i < w; i++) {
-				auto offset = i + j * w;
-				auto color = film->getPixel(i,j).eval().toInt();
-				pixelData[4ul * offset] = color.r;
-				pixelData[4ul * offset + 1] = color.g;
-				pixelData[4ul * offset + 2] = color.b;
-				pixelData[4ul * offset + 3] = 255;
+	void Window::loadView(std::shared_ptr<Film> film, bool noDiscard) {
+
+		auto loadFunc = [=]() {
+			size_t w = film->width(), h = film->height();
+			pixelData.resize(w * h * 4ul);
+			Miyuki::Thread::ParallelFor(0, h, [=](int j, int) {
+				for (int i = 0; i < w; i++) {
+					auto offset = i + j * w;
+					auto color = film->getPixel(i, j).eval().toInt();
+					pixelData[4ul * offset] = color.r;
+					pixelData[4ul * offset + 1] = color.g;
+					pixelData[4ul * offset + 2] = color.b;
+					pixelData[4ul * offset + 3] = 255;
+				}
+			}, 128);
+			windowFlags.viewportUpdateAvailable = true;
+			viewportUpdateFilm = film;
+		};
+		if (noDiscard) {
+			std::lock_guard<std::mutex> lock(viewportMutex);
+			loadFunc();
+		}
+		else {
+			std::unique_lock<std::mutex> lock(viewportMutex, std::try_to_lock);
+			if (!lock.owns_lock()) {
+				fmt::print("Discarded\n");
+				return;
 			}
-		});
-		windowFlags.viewportUpdateAvailable = true;
-		viewportUpdateFilm = film;
+			loadFunc();
+		}
 	}
 
 	void Window::menu() {
@@ -199,10 +213,38 @@ namespace NanoVoxel {
 				}
 				ImGui::EndMenu();
 			}
+			if (ImGui::BeginMenu("Render")) {
+				if (ImGui::MenuItem("Start")) {
+					scene->resumeRender();
+					scene->commit();
+					Miyuki::Bound3f bound(Point3f(0, 0, 0), Point3f(scene->width(), scene->height(), scene->depth()));
+					Point3f _center;
+					bound.boundingSphere(&_center, &distance);
+					center = Vec3f(_center[0], _center[1], _center[2]);
+					std::thread th([=]() {
+						scene->setTotalSamples(1024);
+						auto cb = [=](std::shared_ptr<Film> film) {
+							loadView(film);
+						};
+						auto fcb = [=](std::shared_ptr<Film> film) {
+							loadView(film, true);
+						};
+						scene->render(cb, fcb);
+
+					});
+					th.detach();
+				}
+				if (ImGui::MenuItem("Stop")) {
+					scene->abortRender();
+				}
+				ImGui::EndMenu();
+			}
 			ImGui::EndMainMenuBar();
 		}
 	}
 	void Window::loadDefault() {
 		scene = std::make_unique<Scene>(50, 50, 50);
+		scene->setFilmSize(1000, 1000);
+		scene->camera.position = Miyuki::Vec3f(25, 30, -30);
 	}
 }

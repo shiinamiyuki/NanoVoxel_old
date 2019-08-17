@@ -15,6 +15,7 @@ inline Float4 __makeFloat4(Float x, Float y, Float z, Float w) {
     float4.x = x;
     float4.y = y;
     float4.z = z;
+	float4.w = w;
     return float4;
 }
 

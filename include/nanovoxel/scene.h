@@ -6,6 +6,10 @@
 
 namespace NanoVoxel {
 	using RenderCallback = std::function<void(std::shared_ptr<Film>)>;
+	struct Camera {
+		Miyuki::Vec3f position, direction;
+		Mat4x4 transform;
+	};
 	class Scene {
 		std::unique_ptr<CoreCL::Device> device;
 		std::unique_ptr<CoreCL::Context> context;
@@ -23,8 +27,21 @@ namespace NanoVoxel {
 		}buffers;
 		void createWorld();
 		std::atomic<bool> renderContinuable;
-		size_t kernelWorkSize = 256 * 256;
+		std::vector<PerRayData> prds;
+		std::atomic<size_t> sampleCount = 0;
+		size_t spp = 16;
+		std::atomic<bool> _isRendering;
 	public:
+		void setTotalSamples(size_t spp) {
+			this->spp = spp;
+		}
+		size_t getCurrentSamples()const {
+			return sampleCount;
+		}
+		bool isRendering()const {
+			return _isRendering;
+		}
+		Camera camera;
 		Scene(size_t, size_t, size_t);
 		size_t width()const { return _width; }
 		size_t height()const { return _height; }
@@ -38,13 +55,19 @@ namespace NanoVoxel {
 		}
 		void setFilmSize(size_t w, size_t h) {
 			film.reset(new Film(w, h));
+			buffers.prd.reset(new CoreCL::Buffer<PerRayData>(context.get(),
+				CL_MEM_READ_WRITE, w * h, nullptr));
 		}
 		void resetFilmIfDimensionChanged(size_t w, size_t h) {
 			if (w != film->width() || h != film->height()) {
 				setFilmSize(w, h);
 			}
 		}
+		void resumeRender() {
+			renderContinuable = true;
+		}
 		void abortRender();
 		void doOneRenderPass(const RenderCallback& callback);
+		void render(const RenderCallback& callback, const RenderCallback& finalCallback);
 	};
 }

@@ -108,7 +108,7 @@ static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* is
 	float3 p0 = ray.o;
 	float3 p = floor(p0);
 	float3 stp = sign(ray.d);
-	float3 invd = makeFloat3(1, 1, 1) / ray.d;
+	float3 invd =clamp(makeFloat3(1, 1, 1) / ray.d, makeFloat3(-1e10, -1e10, -1e10),makeFloat3(1e10,1e10,1e10));
 	float3 tMax = fabs((p + max(stp, makeFloat3(0,0,0)) - p0) * invd);
 	float3 delta = fabs(invd);
 
@@ -195,6 +195,16 @@ void trace(Globals* globals, SamplingContext* context) {
 	}
 
 }
+
+Float3 doTransform(knl_global const Mat4x4* m, Float3 v) {
+	Float4 _v = makeFloat4(v.x, v.y, v.z, 1);
+	_v = makeFloat4(
+		dot(m->m[0], _v),
+		dot(m->m[1], _v),
+		dot(m->m[2], _v),
+		dot(m->m[3], _v));
+	return makeFloat3(_v.x, _v.y, _v.z);
+}
 knl_entry
 void NanoVoxelMain(
 	knl_global Globals* _globals,
@@ -203,16 +213,19 @@ void NanoVoxelMain(
 	knl_global PerRayData* _prd) {
 	int id = knl_get_id(0);
 	Globals globals = *_globals;
+
+	if (id >= globals.filmDimension.x * globals.filmDimension.y)return;
+
 	globals.materials = materials;
 	globals.prd = &_prd[id];
+	
 	globals.voxels = voxels;
-
+	
 	knl_global PerRayData* prd = &_prd[id];
-	if (!prd->valid)return;
 
 	Int2 pixel = prd->pixel;
 
-	Float3 ro = makeFloat3(30, 25, -10);
+	Float3 ro = globals.cameraPos;
 
 	float x = pixel.x;
 	float y = pixel.y;
@@ -224,8 +237,12 @@ void NanoVoxelMain(
 	y = (1 - y) * 2 - 1;
 
 	Float3 rd = makeFloat3(x, y, 0);
-
+	
 	rd = normalize(rd - makeFloat3(0, 0, -1));
+	
+	rd = doTransform(&_globals->cameraT, rd);
+	
+
 	SamplingContext context;
 	context.primary = makeRay(ro, rd);
 	trace(&globals, &context);
