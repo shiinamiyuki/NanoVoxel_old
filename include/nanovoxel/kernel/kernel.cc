@@ -40,7 +40,7 @@ static inline Ray makeRay(Float3 o, Float3 d) {
 	Ray ray;
 	ray.o = o;
 	ray.d = d;
-	ray.tnear = 0.0001;
+	ray.tnear = 0.001;
 	ray.tfar = 1e10;
 	return ray;
 }
@@ -88,6 +88,24 @@ bool RayAABBIntersect(const Ray* ray, const BoundBox* box, float* _t) {
 	}
 	return false;
 }
+float3 clipToAxis(float3 v) {
+	if (v.x > v.z) {
+		if (v.x > v.y) {
+			return makeFloat3(-sign(v.x), 0, 0);
+		}
+		else {
+			return makeFloat3(0, -sign(v.y), 0);
+		}
+	}
+	else {
+		if (v.z > v.y) {
+			return makeFloat3(0, 0, -sign(v.z));
+		}
+		else {
+			return makeFloat3(0, -sign(v.y), 0);
+		}
+	}
+}
 
 static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* isct) {
 	const float eps = 0.001;
@@ -103,7 +121,7 @@ static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* is
 	//printf("%f\n", ray->d.z);
 	if (!result)return false;
 	Ray ray = makeRay(_ray->o + _ray->d * distance, _ray->d);
-	ray.o = max(ray.o, makeFloat3(eps, eps, eps));
+	ray.o = clamp(ray.o, makeFloat3(eps, eps, eps), box.pMax - makeFloat3(eps, eps, eps));
 	// traversal
 	float3 p0 = ray.o;
 	float3 p = floor(p0);
@@ -112,12 +130,14 @@ static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* is
 	float3 tMax = fabs((p + max(stp, makeFloat3(0,0,0)) - p0) * invd);
 	float3 delta = fabs(invd);
 
-	float3 mask = makeFloat3(0, 0, 0);
+	float3 mask = clipToAxis(ray.d);
 	float t = 0;
-	for (int i = 0; i < 128; ++i) {
-		if (p.x < 0 || (int)p.x >= globals->dimension.x
-			|| p.y < 0 || (int)p.y >= globals->dimension.y
-			|| p.z < 0 || (int)p.z >= globals->dimension.z) {
+	Int3 Max = globals->dimension;
+	int _N = Max.x < Max.y ? Max.y + Max.z : Max.z + Max.z;
+	for (int i = 0; i < _N; ++i) {
+		if (p.x < 0 || (int)p.x >= Max.x
+			|| p.y < 0 || (int)p.y >= Max.y
+			|| p.z < 0 || (int)p.z >= Max.z) {
 			break;
 		}
 		knl_global const Voxel* voxel = getVoxel(globals, floor(p));
@@ -133,7 +153,7 @@ static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* is
 			// find normal
 			isct->distance = distance + t;
 			isct->normal = -sign(ray.d) * mask;
-
+			isct->voxel = voxel;
 			//printf("%f %f %f\n", p.x, p.y, p.z);
 			return true;
 		}
@@ -169,6 +189,7 @@ static inline bool intersect(Globals* globals, const Ray* _ray, Intersection* is
 	}
 	return false;
 }
+#ifdef INTEGRATE_AO
 void trace(Globals* globals, SamplingContext* context) {
 	globals->prd->done = true;
 	Intersection isct;
@@ -191,9 +212,112 @@ void trace(Globals* globals, SamplingContext* context) {
 		else {
 			color *= 0.0f;
 		}
-		globals->prd->radiance = color;
+		globals->prd->radiance = color;// fabs(isct.normal);
 	}
 
+}
+#endif
+
+Spectrum evalMaterial(knl_global const Material* material, Float3 wo, Float3 wi) {
+	return material->diffuse.color.value * INVPI;
+}
+float maxComp(Float3 v) {
+	if (v.x > v.z) {
+		if (v.y > v.x) {
+			return v.y;
+		}
+		return v.x;
+	}
+	else {
+		if (v.y > v.z) {
+			return v.y;
+		}
+		return v.z;
+	}
+}
+void trace(Globals* globals, SamplingContext* context) {
+	globals->prd->done = true;
+	
+	Spectrum color = makeFloat3(0,0,0);
+	Ray ray = context->primary;
+	Spectrum beta = makeFloat3(1, 1, 1);
+	Spectrum ambient = makeFloat3(0,0,0);
+
+	int cnt = 1;
+	const int maxDepth = 8;
+	bool regenerate = false;
+	for (int depth = 0; depth < maxDepth; depth++) {
+		Intersection isct;
+		if (intersect(globals, &ray, &isct)) {
+			int matId = isct.voxel->materialId;
+
+			knl_global const Material* material = &globals->materials[matId];
+			color += beta * material->emission.value;
+			Float2 u;
+			u.x = lcg_rng(&globals->prd->rng);
+			u.y = lcg_rng(&globals->prd->rng);
+			Float3 wi = cosine_hemisphere_sampling(u);
+			Float pdf = wi.z * INVPI;
+			CoordinateSystem frame;
+			CreateCoordinateSystem(&frame, isct.normal);
+			Float3 wiW = LocalToWorld(&frame, wi);
+			Float3 wo = WorldToLocal(&frame, -ray.d);
+			if (pdf != 0) {
+				beta *= evalMaterial(material, wo, wi) * fabs(wi.z) / pdf;
+				ray = makeRay(isct.hitpoint, wiW);
+				//ray.o += 0.001 * ray.d;
+				float p = maxComp(beta) * 0.9;
+				float terminate = lcg_rng(&globals->prd->rng);
+				if (terminate < 1 - p) {
+					regenerate = true;
+					goto REGENERATE;
+				}
+				else {
+					beta /= p;
+				}
+			}
+			else {
+				regenerate = true;
+				goto REGENERATE;
+			}
+		}
+		else {
+			float t = ray.o.y / -ray.d.y;
+			if (t > ray.tnear) {
+				isct.hitpoint = ray.o + t * ray.d;
+				isct.normal = makeFloat3(0, 1, 0);
+				Float2 u;
+				u.x = lcg_rng(&globals->prd->rng);
+				u.y = lcg_rng(&globals->prd->rng);
+				Float3 wi = cosine_hemisphere_sampling(u);
+				Float pdf = wi.z * INVPI;
+				CoordinateSystem frame;
+				CreateCoordinateSystem(&frame, isct.normal);
+				Float3 wiW = LocalToWorld(&frame, wi);
+				Float3 wo = WorldToLocal(&frame, -ray.d);
+				beta *= makeFloat3(0.75,0.75,0.75) * fabs(wi.z) / pdf;
+				ray = makeRay(isct.hitpoint, wiW);
+			}
+			else {
+				color += beta * ambient;
+				if (depth != 0) {
+					regenerate = true;
+					goto REGENERATE;
+				}
+				break;
+			}
+		}
+	REGENERATE:
+		if (regenerate && depth != maxDepth - 1) {
+			//regeneration
+			//	printf("regeneration\n");			
+			cnt++;
+			ray = context->primary;
+			beta = makeFloat3(1, 1, 1);
+		}
+		regenerate = false;
+	}
+	globals->prd->radiance = color / cnt;
 }
 
 Float3 doTransform(knl_global const Mat4x4* m, Float3 v) {
@@ -230,6 +354,15 @@ void NanoVoxelMain(
 	float x = pixel.x;
 	float y = pixel.y;
 
+	float AAx = lcg_rng(&globals.prd->rng);
+	float AAy = lcg_rng(&globals.prd->rng);
+
+	AAx = (2 * AAx - 1);
+	AAy = (2 * AAy - 1);
+
+	x += AAx;
+	y += AAy;
+
 	x /= globals.filmDimension.x;
 	y /= globals.filmDimension.y;
 
@@ -238,7 +371,8 @@ void NanoVoxelMain(
 
 	Float3 rd = makeFloat3(x, y, 0);
 	
-	rd = normalize(rd - makeFloat3(0, 0, -1));
+	float fov = 80.0 / 90 * PI / 2;
+	rd = normalize(rd - makeFloat3(0, 0, -2/atan(fov/2)));
 	
 	rd = doTransform(&_globals->cameraT, rd);
 	

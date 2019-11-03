@@ -16,7 +16,16 @@ namespace NanoVoxel {
 		virtual void show() = 0;
 		~AbstractWindow() = default;
 	};
+	class Timer {
+	protected:
+		std::chrono::time_point<std::chrono::system_clock> start;
+	public:
+		Timer();
 
+		double elapsedSeconds()const;
+
+		~Timer();
+	};
 
 	class Window : AbstractWindow {
 		GLFWwindow* windowHandle = nullptr;
@@ -39,6 +48,7 @@ namespace NanoVoxel {
 			EFree
 		};
 		CameraMode cameraMode = EPerspective;
+		std::unique_ptr<Timer> timer;
 	public:
 		struct WindowFlags {
 			bool viewportUpdateAvailable;
@@ -47,5 +57,6 @@ namespace NanoVoxel {
 		void loadView(std::shared_ptr<Film>film, bool noDiscard = false);
 		void create(int argc, char** argv);
 		void show();
+
 	};
 }

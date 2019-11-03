@@ -2,7 +2,8 @@
 #include <deque>
 #include <miyuki/vec4.hpp>
 #include <miyuki/math/transform.h>
-
+#include <miyuki/utils/thread.h>
+#include <PerlinNoise.hpp>
 namespace NanoVoxel {
 	static const int TileSize = 256;
 	Float4 fromVec4f(const Miyuki::Vec4f& v) {
@@ -10,15 +11,28 @@ namespace NanoVoxel {
 	}
 	void Scene::createWorld() {
 		world.resize(width() * height() * depth());
-		materials.push_back(Material());
-		for (int i = 0; i < 50; i++) {
-			for (int j = 0; j < 50; j++) {
-				for (int k = 0; k < 50; k++) {
-					auto x = i - 25;
-					auto y = j - 25;
-					auto z = k - 25;
-					if (std::sqrt(x * x + y * y + z * z) <= 20)
-						getVoxel(i, j, k).setMat(0);
+		Material mat0;
+		mat0.emission.value = __makeFloat3(8, 8, 8);
+		mat0.diffuse.color.value = __makeFloat3(0, 0, 0);
+		materials.push_back(mat0);
+		Material mat1;
+		mat1.emission.value = __makeFloat3(0, 0, 0);
+		mat1.diffuse.color.value = __makeFloat3(0.04, 0.5, 0.7);
+		materials.push_back(mat1);
+		siv::PerlinNoise perlin;
+		for (int i = 0; i < width(); i++) {
+			for (int j = 0; j < height(); j++) {
+				for (int k = 0; k < depth(); k++) {
+					double x = double(i) / width() * 5;
+					double y = double(j) / width() * 5;
+					double z = double(k) / width() * 5;
+					auto t = perlin.noise0_1(x, y, z);
+					if (t > 0.5 && t < 0.55) {
+						if (int(t * 1000) % 16 == 0)
+							getVoxel(i, j, k).setMat(0);
+						else
+							getVoxel(i, j, k).setMat(1);
+					}
 				}
 			}
 		}
@@ -75,6 +89,10 @@ namespace NanoVoxel {
 		//set up buffers
 		buffers.prd->write(prds.size(), prds.data());
 
+		updateCamera();
+
+	}
+	void Scene::updateCamera() {
 		auto rotationMatrix = Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(0, 0, 1), camera.direction.z);
 		rotationMatrix = rotationMatrix.mult(Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(0, 1, 0), camera.direction.x));
 		rotationMatrix = rotationMatrix.mult(Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(1, 0, 0), -camera.direction.y));
@@ -82,7 +100,12 @@ namespace NanoVoxel {
 		for (int i = 0; i < 4; i++) {
 			camera.transform.m[i] = fromVec4f(rotationMatrix.m[i]);
 		}
-
+	}
+	Vec3f Camera::cameraToWorld(const Vec3f& v) {
+		auto rotationMatrix = Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(0, 0, 1), direction.z);
+		rotationMatrix = rotationMatrix.mult(Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(0, 1, 0), direction.x));
+		rotationMatrix = rotationMatrix.mult(Miyuki::Matrix4x4::rotation(Miyuki::Vec3f(1, 0, 0), -direction.y));
+		return rotationMatrix.mult(Vec4f(v, 1));
 	}
 	void Scene::abortRender() {
 		renderContinuable = false;
@@ -96,7 +119,7 @@ namespace NanoVoxel {
 
 	void Scene::doOneRenderPass(const RenderCallback& callback) {
 		_isRendering = true;
-		fmt::print("Start pass: {}/{}\n", sampleCount + 1, spp);		
+
 		Globals globals;
 		globals.dimension.x = width();
 		globals.dimension.y = height();
@@ -118,13 +141,20 @@ namespace NanoVoxel {
 
 		buffers.prd->read(prds.size(), prds.data());
 
-		for (const auto& prd : prds) {
+		/*for (const auto& prd : prds) {
 			Miyuki::Point2i raster(prd.pixel.x, prd.pixel.y);
 			Miyuki::Spectrum color(prd.radiance.x, prd.radiance.y, prd.radiance.z);
 			film->addSample(raster, color);
-		}
-
+		}*/
+		Miyuki::Thread::ParallelFor(0, prds.size(), [=](uint32_t i, uint32_t) {
+			const auto& prd = prds[i];
+			Miyuki::Point2i raster(prd.pixel.x, prd.pixel.y);
+			Miyuki::Spectrum color(prd.radiance.x, prd.radiance.y, prd.radiance.z);
+			film->addSample(raster, color);
+		}, 4096);
 		callback(film);
+
+		fmt::print("Done pass: {}/{}\n", sampleCount + 1, spp);
 
 	}
 	void Scene::render(const RenderCallback& callback, const RenderCallback& finalCallback) {
@@ -132,7 +162,11 @@ namespace NanoVoxel {
 		for (sampleCount = 0; sampleCount < spp && renderContinuable; sampleCount++) {
 			doOneRenderPass(callback);
 		}
+		if (sampleCount == spp)
+			finalCallback(film);
+		while (renderContinuable) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		}
 		_isRendering = false;
-		finalCallback(film);
 	}
 }

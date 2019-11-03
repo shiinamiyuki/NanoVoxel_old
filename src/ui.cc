@@ -166,10 +166,116 @@ namespace NanoVoxel {
 				ImGui::End();
 			}
 		};
-		if (ImGui::Begin("View")) {
+		if (ImGui::Begin("View",nullptr,ImGuiWindowFlags_NoScrollbar)) {
 			WindowCloser _;
+			ImGui::Text("Camera Mode");
+			ImGui::SameLine();
+			if (ImGui::RadioButton("Free", cameraMode == EFree)) {
+				cameraMode = EFree;
+			}
+			ImGui::SameLine();
+			if (ImGui::RadioButton("Perspective", cameraMode == EPerspective)) {
+				cameraMode = EPerspective;
+			}
+
 			if (!viewport)return;
 			Draw(*viewport);
+			auto cam = &scene->camera;
+			if (!cam)return;
+			ImGuiIO& io = ImGui::GetIO();
+			if (!scene->isRendering()) {
+				return;
+			}
+			bool restart = false;
+
+			Vec3f newPos = cam->position, newDir = cam->direction;
+			auto pos = io.MousePos;
+			if (!lastViewportMouseDown) {
+				if (io.MouseDown[1]) {
+					auto windowPos = ImGui::GetWindowPos();
+					auto size = ImGui::GetWindowSize();
+					if (pos.x >= windowPos.x && pos.y >= windowPos.y
+						&& pos.x < windowPos.x + size.x && pos.y < windowPos.y + size.y) {
+						lastViewportMouseDown = Point2i(pos.x, pos.y);
+						cameraDir = cam->direction;
+						cameraPos = cam->position;
+						distance = (cameraPos - center.value()).length();
+
+					}
+				}
+			}
+			else if (!io.MouseDown[1]) {
+				lastViewportMouseDown = {};
+			}
+			else {
+
+				if (cameraMode == EPerspective) {
+					if (io.MouseWheel > 0) {
+						distance /= 1.1; restart = true;
+					}
+					else if (io.MouseWheel < 0) {
+						distance *= 1.1; restart = true;
+					}
+				}
+				else {
+					Miyuki::Bound3f bound(Point3f(0, 0, 0), Point3f(scene->width(), scene->height(), scene->depth()));
+					Point3f _;
+					float marchDistance;
+					bound.boundingSphere(&_, &marchDistance);
+					Float march = marchDistance * 0.025;
+					if (io.KeyShift) {
+						march *= 0.1f;
+					}
+					if (io.MouseWheel > 0) {
+						restart = true;
+					}
+					else if (io.MouseWheel < 0) {
+						march *= -1; restart = true;
+					}
+					if (restart) {
+						Vec3f m = cam->cameraToWorld(Vec4f(0, 0, 1, 1));
+						m.normalize();
+						newPos = cam->position + march * m;
+						//Log::log("{}\n", march);
+					}
+				}
+				auto delta = io.MouseDelta;
+				if (delta.x != 0 || delta.y != 0 || restart) {
+					restart = true;
+					auto last = lastViewportMouseDown.value();
+					if (cameraMode == EPerspective) {
+						auto offset = Vec3f(pos.x - last.x, -(pos.y - last.y), 0.0f) / 500;
+						newDir = cameraDir + Vec3f(offset.x, offset.y, 0);
+						auto dir = Vec3f(
+							std::sin(newDir.x) * std::cos(newDir.y),
+							std::sin(newDir.y),
+							std::cos(newDir.x) * std::cos(newDir.y));
+						newPos = -dir * distance + center.value();
+					}
+					else {
+						auto offset = Vec3f(pos.x - last.x, -(pos.y - last.y), 0.0f) / 500;
+						newDir = cameraDir + Vec3f(offset.x, offset.y, 0);
+					}
+				}
+			}
+			if (restart) {
+				scene->abortRender();
+				cam->position = newPos;
+				cam->direction = newDir;
+				while (scene->isRendering()) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+				scene->resumeRender();
+				scene->updateCamera();				
+				std::thread th([=]() {
+					scene->render([=](std::shared_ptr<Film> film) {
+						loadView(film);
+					}, [=](std::shared_ptr<Film> film) {
+						loadView(film, true);
+					});
+				});
+				th.detach();
+			}
 		}
 	}
 
@@ -196,6 +302,19 @@ namespace NanoVoxel {
 			loadFunc();
 		}
 		else {
+			if (!timer) {
+				timer.reset(new Timer());
+			}
+			else {
+				if (scene->getCurrentSamples() >= 16) {
+					if (timer->elapsedSeconds() > 1) {
+						timer.reset(new Timer());
+					}
+					else {
+						return;
+					}
+				}
+			}
 			std::unique_lock<std::mutex> lock(viewportMutex, std::try_to_lock);
 			if (!lock.owns_lock()) {
 				fmt::print("Discarded\n");
@@ -222,12 +341,13 @@ namespace NanoVoxel {
 					bound.boundingSphere(&_center, &distance);
 					center = Vec3f(_center[0], _center[1], _center[2]);
 					std::thread th([=]() {
-						scene->setTotalSamples(1024);
+						scene->setTotalSamples(4096);
 						auto cb = [=](std::shared_ptr<Film> film) {
 							loadView(film);
 						};
 						auto fcb = [=](std::shared_ptr<Film> film) {
 							loadView(film, true);
+							film->writeImage("out.png");
 						};
 						scene->render(cb, fcb);
 
@@ -243,8 +363,22 @@ namespace NanoVoxel {
 		}
 	}
 	void Window::loadDefault() {
-		scene = std::make_unique<Scene>(50, 50, 50);
+		scene = std::make_unique<Scene>(16, 16, 16);
 		scene->setFilmSize(1000, 1000);
 		scene->camera.position = Miyuki::Vec3f(25, 30, -30);
+		//scene->camera.direction = Vec3f(3.14159 / 6, 0, 0);
+	}
+	Timer::Timer() {
+		start = std::chrono::system_clock::now();
+	}
+
+	double Timer::elapsedSeconds() const {
+		auto end = std::chrono::system_clock::now();
+		std::chrono::duration<double> elapsed_seconds = end - start;
+		return elapsed_seconds.count();
+	}
+
+	Timer::~Timer() {
+
 	}
 }

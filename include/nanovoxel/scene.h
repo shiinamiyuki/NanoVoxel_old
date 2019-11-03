@@ -9,6 +9,7 @@ namespace NanoVoxel {
 	struct Camera {
 		Miyuki::Vec3f position, direction;
 		Mat4x4 transform;
+		Vec3f cameraToWorld(const Vec3f&v);
 	};
 	class Scene {
 		std::unique_ptr<CoreCL::Device> device;
@@ -50,6 +51,7 @@ namespace NanoVoxel {
 		const std::vector<Material>& getMaterials()const { return materials; }
 		std::vector<Material>& getMaterials() { return materials; }
 		void commit();
+		void updateCamera();
 		Voxel& getVoxel(int i, int j, int k) {
 			return world[i + width() * j + width() * height() * k];
 		}

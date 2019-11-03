@@ -106,6 +106,7 @@ typedef struct knl_packed Intersection {
 	Float3 hitpoint;
 	Float3 normal;
 	float distance;
+	knl_global const Voxel* voxel;
 }Intersection;
 
 
