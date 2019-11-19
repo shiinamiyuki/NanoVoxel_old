@@ -6,12 +6,20 @@
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtx/transform.hpp>
 #include <cstdio>
 #include <vector>
 #include <iostream>
 #include <algorithm>
 
 using namespace glm;
+
+struct Material {
+    vec3 baseColor;
+    float roughness;
+    float metalness;
+    float specular;
+};
 
 void GLAPIENTRY
 MessageCallback(GLenum source,
@@ -43,6 +51,9 @@ uniform vec2 iResolution;
 uniform mat4 cameraTransform;
 uniform ivec3 worldDimension;
 uniform sampler3D world;
+uniform int iTime;
+
+const float M_PI = 3.1415926535;
 float maxComp(vec3 o){
     return max(max(o.x,o.y),o.z);
 }
@@ -59,7 +70,7 @@ float intersectBox(vec3 o, vec3 d, vec3 p1, vec3 p2, out vec3 n){
     vec3 tmin = min(t0, t1);
     vec3 tmax = max(t0, t1);
     float t = maxComp(tmin);
-    if(t < minComp(tmax) && t >= RayBias){
+    if(t < minComp(tmax)){
     	t = max(t, RayBias);
         if(t > minComp(tmax)){
         	return -1.0;
@@ -95,11 +106,11 @@ int map(vec3 p){
 }
 
 
-bool intersect(vec3 ro, vec3 rd, out Intersection isct)
+bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 {
     vec3 n;
     float distance = intersectBox(ro, rd, vec3(-1), vec3(worldDimension), n);
-    if(distance < RayBias){
+    if(distance < 0.0){
         return false;
     }
 
@@ -160,34 +171,118 @@ bool intersect(vec3 ro, vec3 rd, out Intersection isct)
     return false;
 }
 
+bool intersect(vec3 ro, vec3 rd, out Intersection isct){
+    if(intersect1(ro, rd,isct)){
+        return true;
+    }
+    float t = ro.y / -rd.y;
+    if(t < RayBias)
+        return false;
+    isct.t = t;
+    isct.p = ro + t * rd;
+    isct.n = vec3(0,1,0);
+    return true;
+}
+
+// Returns 2D random point in [0,1]²
+vec2 random2(vec2 st){
+  st = vec2( dot(st,vec2(127.1,311.7)),
+             dot(st,vec2(269.5,183.3)) );
+  return fract(sin(st)*43758.5453123);
+}
+// Inputs:
+//   st  3D seed
+// Returns 2D random point in [0,1]²
+vec2 random2(vec3 st){
+  vec2 S = vec2( dot(st,vec3(127.1,311.7,783.089)),
+             dot(st,vec3(269.5,183.3,173.542)) );
+  return fract(sin(S)*43758.5453123);
+}
+
 struct Sampler{
     int dimension;
-    vec3 seed;
+    vec2 seed;
 };
 
 float nextFloat(inout Sampler sampler){
-    return 0.0f;
-}
-vec2 nextFloat2(inout Sampler sampler){
-    return vec2(nextFloat(sampler), nextFloat(sampler));
+    float v = random2(vec3(sampler.seed, sampler.dimension)).x;
+    sampler.dimension++;
+    return v;
 }
 
-vec3 Li(vec3 o, vec3 d){
+vec2 nextFloat2(inout Sampler sampler){
+    vec2 v = random2(vec3(sampler.seed, sampler.dimension));
+    sampler.dimension++;
+    return v;
+}
+struct LocalFrame{
+    vec3 N, T, B;
+};
+
+void computeLocalFrame(vec3 N, out LocalFrame frame){
+    frame.N = N;
+    if(abs(N.x) > abs(N.y)){
+        frame.T = vec3(-N.z, 0.0f, N.x) / sqrt(N.z * N.z + N.x * N.x);
+    }else{
+        frame.T = vec3(0.0f, -N.z, N.y) / sqrt(N.z * N.z + N.y * N.y);
+    }
+    frame.B = normalize(cross(N, frame.T));
+}
+
+vec3 worldToLocal(vec3 v, in LocalFrame frame){
+    return vec3(dot(v, frame.T),dot(v,frame.N),dot(v, frame.B));
+}
+
+vec3 localToWorld(vec3 v, in LocalFrame frame){
+    return v.x * frame.T +  v.y * frame.N + v.z * frame.B;
+}
+
+vec2 diskSampling(vec2 u){
+    float r = u.x;
+    float t = u.y * 2.0 * M_PI;
+    r = sqrt(r);
+    return vec2(r * cos(t),r * sin(t));
+}
+
+vec3 cosineHemisphereSampling(vec2 u){
+    vec2 d = diskSampling(u);
+    float h = 1.0 - dot(d, d);
+    return vec3(d.x, sqrt(h), d.y);
+}
+
+vec3 LiBackground(vec3 o, vec3 d){
+    return vec3(0);
+}
+vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     Intersection isct;
     float tmax = 100.0f;
     if(!intersect(o, d, isct)){
-        return vec3(0);
+        return LiBackground(o, d);
     }
-    return vec3(0.5) + 0.5 * isct.n;
+    LocalFrame frame;
+    computeLocalFrame(isct.n, frame);
+    vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
+    wi = localToWorld(wi, frame);
+    o = isct.p;//+ RayBias * wi;
+    d = wi;
+    if(!intersect(o, d, isct)){
+        return vec3(1);
+    }
+    return vec3(0);
+    //return vec3(0.5) + 0.5 * isct.n;
 }
-void main()
-{
+
+void main() {
     vec2 uv = gl_FragCoord.xy / iResolution;
+    Sampler sampler;
+    sampler.dimension = 0;
+    sampler.seed = uv + vec2(0.0, 0.0);
+
     uv = 2.0 * uv - vec2(1.0);
     uv.x *= iResolution.x / iResolution.y;
-    vec3 o = vec3(20,20,-10);
-    vec3 d = normalize(vec3(uv, 1) - vec3(0));
-    FragColor = vec4(Li(o, d), 1.0);
+    vec3 o = (cameraTransform * vec4(vec3(0), 1)).xyz;
+    vec3 d = mat3(cameraTransform) * normalize(vec3(uv, 1) - vec3(0));
+    FragColor = vec4(Li(o, d, sampler), 1.0);
 }
 )";
 
@@ -213,7 +308,7 @@ struct World {
 
     }
 
-    World(const ivec3 &worldDimension) : worldDimension(worldDimension) {
+    explicit World(const ivec3 &worldDimension) : worldDimension(worldDimension) {
         alignedDimension = worldDimension;
         alignedDimension.x = (alignedDimension.x + 7U) & (-4U);
         data.resize(alignedDimension.x * alignedDimension.y * alignedDimension.z, 0);
@@ -250,7 +345,12 @@ struct Renderer {
     GLuint VBO;
     World world;
     mat4 cameraTransform;
-
+    GLuint sample; // texture for 1 spp
+    GLuint post; // post processor
+    vec2 mousePos;
+    bool prevMouseDown = false;
+    mat4 prevCameraTransform;
+    int iTime = 0;
     explicit Renderer() : world(ivec3(50, 50, 50)) {
 
     }
@@ -260,19 +360,19 @@ struct Renderer {
         auto vert = glCreateShader(GL_VERTEX_SHADER);
         auto frag = glCreateShader(GL_FRAGMENT_SHADER);
         GLint success;
-        glShaderSource(frag, 1, &fragmentShaderSource, NULL);
+        glShaderSource(frag, 1, &fragmentShaderSource, nullptr);
         glCompileShader(frag);
         glGetShaderiv(frag, GL_COMPILE_STATUS, &success);
         if (!success) {
-            glGetShaderInfoLog(frag, error.size(), NULL, error.data());
+            glGetShaderInfoLog(frag, error.size(), nullptr, error.data());
             std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << error.data() << std::endl;
             exit(1);
         };
-        glShaderSource(vert, 1, &vertexShaderSource, NULL);
+        glShaderSource(vert, 1, &vertexShaderSource, nullptr);
         glCompileShader(vert);
         glGetShaderiv(vert, GL_COMPILE_STATUS, &success);
         if (!success) {
-            glGetShaderInfoLog(vert, error.size(), NULL, error.data());
+            glGetShaderInfoLog(vert, error.size(), nullptr, error.data());
             std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << error.data() << std::endl;
             exit(1);
         }
@@ -282,13 +382,23 @@ struct Renderer {
         glLinkProgram(program);
         glGetProgramiv(program, GL_LINK_STATUS, &success);
         if (!success) {
-            glGetProgramInfoLog(program, error.size(), NULL, error.data());
+            glGetProgramInfoLog(program, error.size(), nullptr, error.data());
             std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << error.data() << std::endl;
             exit(1);
         }
         glDeleteShader(vert);
         glDeleteShader(frag);
         std::cout << "Shader compiled without complaint" << std::endl;
+
+//        GLuint FBO;
+//        glGenFramebuffers(1, &FBO);
+//        glGenTextures(1, &sample);
+//        glBindTexture(GL_TEXTURE_2D, sample);
+//        glBindFramebuffer(GL_FRAMEBUFFER, FBO);
+//        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+//            std::cerr << "?" << std::endl;
+//            exit(1);
+//        }
     }
 
     void setUpVBO() {
@@ -302,6 +412,7 @@ struct Renderer {
                 -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  // bottom left
                 -1.0f, 1.0f, 0.0f, 0.0f, 1.0f  // top left
         };
+
         glGenBuffers(1, &VBO);
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
@@ -309,11 +420,32 @@ struct Renderer {
 
     void setUpWorld() {
         world.setUpTexture();
+        prevCameraTransform = cameraTransform = identity<mat4>();
     }
 
     void render(GLFWwindow *window) {
+        {
+            double xpos,ypos;
+            glfwGetCursorPos(window,&xpos,&ypos);
+            int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
+            if(state == GLFW_PRESS){
+                if(!prevMouseDown)
+                    mousePos = vec2(xpos,ypos);
+                auto p = vec2(xpos,ypos);
+                auto rot = (p - mousePos) /  300.0f * float(M_PI);
+                auto M = rotate(rot.y,vec3(1,0,0));
+                M *= rotate(rot.x, vec3(0,1,0));
+                cameraTransform = translate(vec3(20,20,0)) * M * prevCameraTransform * translate(vec3(0,0,-20));
+            }else{
+                if(prevMouseDown){
+               //     prevCameraTransform = cameraTransform;
+                }
+            }
+            prevMouseDown = state == GLFW_PRESS;
+        }
+
         int w, h;
-        glfwGetWindowSize(window, &w, &h);
+        glfwGetFramebufferSize(window, &w, &h);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void *) 0);
         glEnableVertexAttribArray(0);
         glUseProgram(program);
@@ -323,6 +455,8 @@ struct Renderer {
                     world.worldDimension.x,
                     world.worldDimension.y,
                     world.worldDimension.z);
+        glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
+        glUniformMatrix4fv(glGetUniformLocation(program, "cameraTransform"), 1, GL_FALSE, &cameraTransform[0][0]);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 };
