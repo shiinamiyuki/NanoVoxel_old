@@ -44,14 +44,16 @@ void main()
 }
 )";
 const char *fragmentShaderSource = R"(
-#version 330 core
+#version 420 core
 out vec4 FragColor;
-uniform vec2 iResolution;
+layout(binding = 0) uniform sampler3D world;
+layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
 
+uniform vec2 iResolution;
 uniform mat4 cameraTransform;
 uniform ivec3 worldDimension;
-uniform sampler3D world;
 uniform int iTime;
+
 
 const float M_PI = 3.1415926535;
 float maxComp(vec3 o){
@@ -276,13 +278,18 @@ void main() {
     vec2 uv = gl_FragCoord.xy / iResolution;
     Sampler sampler;
     sampler.dimension = 0;
-    sampler.seed = uv + vec2(0.0, 0.0);
+    sampler.seed = uv + vec2(0.0, iTime);
 
     uv = 2.0 * uv - vec2(1.0);
     uv.x *= iResolution.x / iResolution.y;
     vec3 o = (cameraTransform * vec4(vec3(0), 1)).xyz;
     vec3 d = mat3(cameraTransform) * normalize(vec3(uv, 1) - vec3(0));
-    FragColor = vec4(Li(o, d, sampler), 1.0);
+    vec4 color = vec4(Li(o, d, sampler), 1.0);
+    vec4 prevColor = imageLoad(accumlatedImage,  ivec2(gl_FragCoord.xy));
+    if(iTime > 0)
+        color += prevColor;
+    FragColor = vec4(color.rgb / color.a, 1.0);
+    imageStore(accumlatedImage,  ivec2(gl_FragCoord.xy), color);
 }
 )";
 
@@ -346,11 +353,13 @@ struct Renderer {
     World world;
     mat4 cameraTransform;
     GLuint sample; // texture for 1 spp
+    GLuint accum; // accumlated sample
     GLuint post; // post processor
-    vec2 mousePos;
+    ivec2 mousePos, prevMousePos, lastFrameMousePos;
     bool prevMouseDown = false;
     mat4 prevCameraTransform;
     int iTime = 0;
+
     explicit Renderer() : world(ivec3(50, 50, 50)) {
 
     }
@@ -399,6 +408,28 @@ struct Renderer {
 //            std::cerr << "?" << std::endl;
 //            exit(1);
 //        }
+
+        glGenTextures(1, &sample);
+        glBindTexture(GL_TEXTURE_2D, sample);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1280, 720, 0, GL_RGBA,
+                     GL_FLOAT, NULL);
+
+        glGenTextures(1, &accum);
+        glBindTexture(GL_TEXTURE_2D, accum);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1280, 720, 0, GL_RGBA,
+                     GL_FLOAT, NULL);
+
+
     }
 
     void setUpVBO() {
@@ -425,23 +456,27 @@ struct Renderer {
 
     void render(GLFWwindow *window) {
         {
-            double xpos,ypos;
-            glfwGetCursorPos(window,&xpos,&ypos);
+            double xpos, ypos;
+            glfwGetCursorPos(window, &xpos, &ypos);
             int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
-            if(state == GLFW_PRESS){
-                if(!prevMouseDown)
-                    mousePos = vec2(xpos,ypos);
-                auto p = vec2(xpos,ypos);
-                auto rot = (p - mousePos) /  300.0f * float(M_PI);
-                auto M = rotate(rot.y,vec3(1,0,0));
-                M *= rotate(rot.x, vec3(0,1,0));
-                cameraTransform = translate(vec3(20,20,0)) * M * prevCameraTransform * translate(vec3(0,0,-20));
-            }else{
-                if(prevMouseDown){
-               //     prevCameraTransform = cameraTransform;
+            if (state == GLFW_PRESS) {
+                if (!prevMouseDown)
+                    mousePos = ivec2(xpos, ypos);
+                auto p = ivec2(xpos, ypos);
+                if (lastFrameMousePos != p) {
+                    iTime = 0;
+                }
+                auto rot = (vec2(p) - vec2(prevMouseDown)) / 300.0f * float(M_PI);
+                auto M = rotate(rot.y, vec3(1, 0, 0));
+                M *= rotate(rot.x, vec3(0, 1, 0));
+                cameraTransform = translate(vec3(world.worldDimension) / 2.0f) * M * translate(vec3(0, 0, -20));
+            } else {
+                if (prevMouseDown) {
+                    prevMousePos = mousePos;
                 }
             }
             prevMouseDown = state == GLFW_PRESS;
+            lastFrameMousePos = ivec2(xpos, ypos);
         }
 
         int w, h;
@@ -449,7 +484,11 @@ struct Renderer {
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void *) 0);
         glEnableVertexAttribArray(0);
         glUseProgram(program);
+        glActiveTexture(GL_TEXTURE0 + 0);
         glBindTexture(GL_TEXTURE_3D, world.world);
+        glBindTexture(GL_TEXTURE_2D, accum);
+        glBindImageTexture(1, accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+        glUniform1i(glGetUniformLocation(program, "world"), 0);
         glUniform2f(glGetUniformLocation(program, "iResolution"), w, h);
         glUniform3i(glGetUniformLocation(program, "worldDimension"),
                     world.worldDimension.x,
@@ -458,6 +497,8 @@ struct Renderer {
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraTransform"), 1, GL_FALSE, &cameraTransform[0][0]);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 };
 
