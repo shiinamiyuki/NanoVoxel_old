@@ -1,6 +1,3 @@
 # NanoVoxel
-GPU accelerated wave-front voxel renderer
+Single file voxel path tracer
 
-## Features
-
-- Wave-front path tracing
