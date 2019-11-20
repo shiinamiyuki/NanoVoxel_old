@@ -1,4 +1,4 @@
-const char *computeShaderSource = R"(#line 0
+const char *computeShaderSource = R"(#line 1
 layout(local_size_x = 16, local_size_y = 16,local_size_z = 1) in;
 layout(binding = 0) uniform sampler3D world;
 layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
@@ -32,7 +32,7 @@ layout(std430, binding = 4) readonly buffer Materials{
 };
 
 
-const float M_PI = 3.1415926535;
+
 float maxComp(vec3 o){
     return max(max(o.x,o.y),o.z);
 }

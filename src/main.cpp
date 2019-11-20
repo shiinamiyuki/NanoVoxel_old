@@ -44,6 +44,8 @@ MessageCallback(GLenum source,
 
 #include "../shaders/compute-shader.h"
 #include "../shaders/external-shaders.h"
+#include "../shaders/bsdf.h"
+#include "../shaders/common-defs.h"
 
 void setUpDockSpace();
 
@@ -135,7 +137,7 @@ struct Renderer {
     int iTime = 0;
     vec2 eulerAngle = vec2(0, 0);
     bool needRedraw = true;
-    uint32_t options = 0;
+    uint32_t options = ENABLE_ATMOSPHERE_SCATTERING;
 
     explicit Renderer() : world(ivec3(50, 50, 50)) {
     }
@@ -144,13 +146,15 @@ struct Renderer {
         std::vector<char> error(4096, 0);
         auto shader = glCreateShader(GL_COMPUTE_SHADER);
         GLint success;
-        const char *version = "#version 430";
+        const char *version = "#version 430\n";
         const char *src[] = {
                 version,
+                commondDefsSource,
                 externalShaderSource,
+                bsdfSource,
                 computeShaderSource
         };
-        glShaderSource(shader, 3, src, nullptr);
+        glShaderSource(shader, 5, src, nullptr);
         glCompileShader(shader);
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
