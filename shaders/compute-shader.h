@@ -12,6 +12,7 @@ uniform int iTime;
 uniform vec3 sunPos;
 uniform uint options;
 
+
 #define ENABLE_ATMOSPHERE_SCATTERING 0x1
 
 struct Material {
@@ -85,7 +86,7 @@ int map(vec3 p){
     return int(texelFetch(world, ivec3(p), 0).r * 255.0);
 }
 
-
+const float tFar = 500.0f;
 bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 {
     vec3 n;

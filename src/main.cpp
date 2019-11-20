@@ -21,6 +21,7 @@
 #include <chrono>
 #include <enkimi.h>
 #include <miniz.h>
+#include <optional>
 
 using namespace glm;
 
@@ -64,27 +65,35 @@ struct World {
         float MaterialSpecular[MATERIAL_COUNT] = {0};
         float MaterialEmissionStrength[MATERIAL_COUNT] = {1};
     } materials;
+    std::string materialNames[MATERIAL_COUNT];
+
+    void loadMinecraftMaterials();
 
     void initData() {
 //#pragma  omp parallel for default(none)
-        for (int x = 0; x < worldDimension.x; x++) {
-            siv::PerlinNoise perlin;
-            for (int y = 0; y < worldDimension.y; y++) {
-                for (int z = 0; z < worldDimension.z; z++) {
-                    vec3 p = vec3(x, y, z);// / vec3(worldDimension);
-                    p *= 0.1f;
-                    auto n = perlin.noise0_1(p.x, p.y, p.z);
-                    if (0.6 < n && n < 0.8) {
-                        if (n > 0.73) {
-                            (*this)(x, y, z) = 2;
-                        } else {
-                            (*this)(x, y, z) = 1;
-                        }
-                    } else {
-                        (*this)(x, y, z) = 0;
-                    }
-                }
-            }
+//        for (int x = 0; x < worldDimension.x; x++) {
+//            siv::PerlinNoise perlin;
+//            for (int y = 0; y < worldDimension.y; y++) {
+//                for (int z = 0; z < worldDimension.z; z++) {
+//                    vec3 p = vec3(x, y, z);// / vec3(worldDimension);
+//                    p *= 0.1f;
+//                    auto n = perlin.noise0_1(p.x, p.y, p.z);
+//                    if (0.6 < n && n < 0.8) {
+//                        if (n > 0.73) {
+//                            (*this)(x, y, z) = 2;
+//                        } else {
+//                            (*this)(x, y, z) = 1;
+//                        }
+//                    } else {
+//                        (*this)(x, y, z) = 0;
+//                    }
+//                }
+//            }
+//        }
+        for (int i = 1; i < MATERIAL_COUNT; i++) {
+            std::ostringstream os;
+            os << "Material " << i;
+            materialNames[i] = os.str();
         }
         glGenBuffers(1, &materialsSSBO);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, materialsSSBO);
@@ -123,11 +132,149 @@ struct World {
     }
 };
 
+std::optional<std::pair<ivec3, ivec3>> getWorldBound(const std::string &filename) {
+    // open the region file
+    FILE *fp = fopen(filename.c_str(), "rb");
+    if (!fp) {
+        printf("failed to open file\n");
+        return {};
+    }
+
+    // output file
+    FILE *fpOutput = stdout;//fopen("output.txt", "w");
+    if (!fpOutput) {
+        printf("failed to open output file\n");
+        return {};;
+    }
+
+    enkiRegionFile regionFile = enkiRegionFileLoad(fp);
+    ivec3 worldMin(std::numeric_limits<int>::max()), worldMax(std::numeric_limits<int>::min());
+    for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
+        enkiNBTDataStream stream;
+        enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
+        if (stream.dataLength) {
+            enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
+            enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
+            ivec3 chunkPos = ivec3(chunkOriginPos.x,
+                                   chunkOriginPos.y, chunkOriginPos.z);
+            worldMin = min(worldMin, chunkPos);
+            worldMax = max(worldMax, chunkPos);
+//            fprintf(fpOutput, "Chunk at xyz{ %d, %d, %d }  Number of sections: %d \n", chunkOriginPos.x,
+//                    chunkOriginPos.y, chunkOriginPos.z, aChunk.countOfSections);
+
+            // iterate through chunk and count non 0 voxels as a demo
+            int64_t numVoxels = 0;
+            for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
+                if (aChunk.sections[section]) {
+                    enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
+
+                    enkiMICoordinate sPos;
+                    // note order x then z then y iteration for cache efficiency
+                    for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
+                        for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
+                            for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
+                                uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
+                                if (voxel) {
+                                    ++numVoxels;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
+
+            enkiNBTRewind(&stream);
+            // PrintStreamStructureToFile(&stream, fpOutput);
+        }
+        enkiNBTFreeAllocations(&stream);
+    }
+
+    enkiRegionFileFreeAllocations(&regionFile);
+
+    printf("%d %d %d  to %d %d %d\n", worldMin.x, worldMin.y, worldMin.z, worldMax.x, worldMax.y, worldMax.z);
+    fclose(fp);
+    return std::make_pair(worldMin, worldMax + ivec3(16, 256, 16));
+}
+
+std::shared_ptr<World> McLoader(const std::string &filename) {
+    auto bound = getWorldBound(filename);
+    if (!bound) {
+        return nullptr;
+    }
+    // open the region file
+    FILE *fp = fopen(filename.c_str(), "rb");
+    if (!fp) {
+        printf("failed to open file\n");
+        return nullptr;
+    }
+
+    // output file
+    FILE *fpOutput = stdout;//fopen("output.txt", "w");
+    if (!fpOutput) {
+        printf("failed to open output file\n");
+        return nullptr;
+    }
+    auto worldMin = bound.value().first;
+    auto worldMax = bound.value().second;
+
+    auto world = std::make_shared<World>(worldMax - worldMin);
+    printf("world size %d %d %d\n", world->worldDimension.x, world->worldDimension.y, world->worldDimension.z);
+    enkiRegionFile regionFile = enkiRegionFileLoad(fp);
+
+    for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
+        enkiNBTDataStream stream;
+        enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
+        if (stream.dataLength) {
+            enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
+            enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
+            ivec3 chunkPos = ivec3(chunkOriginPos.x,
+                                   chunkOriginPos.y, chunkOriginPos.z);
+
+//            fprintf(fpOutput, "Chunk at xyz{ %d, %d, %d }  Number of sections: %d \n", chunkOriginPos.x,
+//                    chunkOriginPos.y, chunkOriginPos.z, aChunk.countOfSections);
+
+            // iterate through chunk and count non 0 voxels as a demo
+            int64_t numVoxels = 0;
+            for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
+                if (aChunk.sections[section]) {
+                    enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
+
+                    enkiMICoordinate sPos;
+                    // note order x then z then y iteration for cache efficiency
+                    for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
+                        for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
+                            for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
+                                uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
+                                auto p = ivec3(sPos.x, sPos.y, sPos.z) +
+                                         ivec3(sectionOrigin.x, sectionOrigin.y, sectionOrigin.z) - worldMin;
+                                (*world)(p) = voxel;
+
+                            }
+                        }
+                    }
+                }
+            }
+            //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
+
+            enkiNBTRewind(&stream);
+            // PrintStreamStructureToFile(&stream, fpOutput);
+        }
+        enkiNBTFreeAllocations(&stream);
+    }
+
+    enkiRegionFileFreeAllocations(&regionFile);
+
+
+    fclose(fp);
+    return world;
+}
+
 struct Renderer {
     GLint program;
     GLuint VBO;
     GLuint seed;
-    World world;
+    std::shared_ptr<World> world;
     mat4 cameraDirection, cameraOrigin;
     GLuint sample; // texture for 1 spp
     GLuint accum; // accumlated sample
@@ -138,8 +285,9 @@ struct Renderer {
     vec2 eulerAngle = vec2(0, 0);
     bool needRedraw = true;
     uint32_t options = ENABLE_ATMOSPHERE_SCATTERING;
+    float orbitDistance = 2.5f;
 
-    explicit Renderer() : world(ivec3(50, 50, 50)) {
+    explicit Renderer() {
     }
 
     void compileShader() {
@@ -154,7 +302,7 @@ struct Renderer {
                 bsdfSource,
                 computeShaderSource
         };
-        glShaderSource(shader, 5, src, nullptr);
+        glShaderSource(shader, sizeof(src) / sizeof(src[0]), src, nullptr);
         glCompileShader(shader);
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
@@ -226,7 +374,7 @@ struct Renderer {
 
 
     void setUpWorld() {
-        world.setUpTexture();
+        world->setUpTexture();
         cameraOrigin = translate(vec3(20, 20, -20));
         cameraDirection = identity<mat4>();//<=inverse(M);
     }
@@ -246,8 +394,17 @@ struct Renderer {
 
             auto pos = io.MousePos;
             bool pressed = io.MouseDown[1];
-            if (pressed && (pos.x >= windowPos.x && pos.y >= windowPos.y
-                            && pos.x < windowPos.x + size.x && pos.y < windowPos.y + size.y)) {
+            bool inside = (pos.x >= windowPos.x && pos.y >= windowPos.y
+                           && pos.x < windowPos.x + size.x && pos.y < windowPos.y + size.y);
+            if (io.MouseWheel != 0 && inside) {
+                iTime = 0;
+                if (io.MouseWheel < 0) {
+                    orbitDistance *= 1.1;
+                } else {
+                    orbitDistance *= 0.9;
+                }
+            }
+            if (pressed && inside) {
                 if (!prevMouseDown) {
                     mousePos = ivec2(xpos, ypos);
                     if (mousePos != prevMousePos) {
@@ -269,19 +426,20 @@ struct Renderer {
             }
             auto M = rotate(eulerAngle.x, vec3(0, 1, 0));
             M *= rotate(eulerAngle.y, vec3(1, 0, 0));
-            auto tr = vec3(world.worldDimension) * 0.5f;
+            auto tr = vec3(world->worldDimension) * 0.5f;
             tr.z *= -1.0f;
             cameraDirection = M;
-            cameraOrigin = translate(vec3(tr.x, tr.y, -tr.z)) * cameraDirection * translate(vec3(0, 0, 3.5 * tr.z));
+            cameraOrigin =
+                    translate(vec3(tr.x, tr.y, -tr.z)) * cameraDirection * translate(vec3(0, 0, orbitDistance * tr.z));
 
             prevMouseDown = pressed;
             lastFrameMousePos = ivec2(xpos, ypos);
         }
-        vec3 sunPos = vec3(0, cos(world.sunHeight) * 0.3 + 0.2, -1);
+        vec3 sunPos = vec3(0, cos(world->sunHeight) * 0.3 + 0.2, -1);
         int w = 1280, h = 720;
         glUseProgram(program);
         glActiveTexture(GL_TEXTURE0 + 0);
-        glBindTexture(GL_TEXTURE_3D, world.world);
+        glBindTexture(GL_TEXTURE_3D, world->world);
         glBindTexture(GL_TEXTURE_2D, accum);
         glBindImageTexture(1, accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
         glBindTexture(GL_TEXTURE_2D, seed);
@@ -291,26 +449,26 @@ struct Renderer {
         glUniform1i(glGetUniformLocation(program, "world"), 0);
         glUniform2f(glGetUniformLocation(program, "iResolution"), w, h);
         glUniform3i(glGetUniformLocation(program, "worldDimension"),
-                    world.worldDimension.x,
-                    world.worldDimension.y,
-                    world.worldDimension.z);
+                    world->worldDimension.x,
+                    world->worldDimension.y,
+                    world->worldDimension.z);
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
         glUniform1ui(glGetUniformLocation(program, "options"), options);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
         glUniform3fv(glGetUniformLocation(program, "sunPos"), 1, (float *) &sunPos);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, world.materialsSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, world->materialsSSBO);
         if (needRedraw) {
             //printf("redraw\n");
 
             GLvoid *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
-            memcpy(p, &world.materials, sizeof(World::Materials));
+            memcpy(p, &world->materials, sizeof(World::Materials));
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
 //        GLuint blockIndex = 0;
 //        blockIndex = glGetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "Materials");
 //        glShaderStorageBlockBinding(program, blockIndex, 4);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, world.materialsSSBO);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, world->materialsSSBO);
         glDispatchCompute(std::ceil(w / 16), std::ceil(h / 16), 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         if (iTime % 200 == 0)
@@ -368,6 +526,8 @@ struct Application {
         ImGui_ImplOpenGL3_Init("#version 430");
 
         renderer = std::make_unique<Renderer>();
+        renderer->world = McLoader("../data/r.-2.0.mca");
+        renderer->world->loadMinecraftMaterials();
         renderer->compileShader();
         renderer->setUpWorld();
 
@@ -378,10 +538,7 @@ struct Application {
     void showEditor() {
         if (ImGui::Begin("Explorer")) {
             for (int i = 1; i < MATERIAL_COUNT; i++) {
-                std::ostringstream s;
-                s << "Material " << i;
-                auto name = s.str();
-                if (ImGui::Selectable(name.c_str(), selectedMaterialIndex == i)) {
+                if (ImGui::Selectable(renderer->world->materialNames[i].c_str(), selectedMaterialIndex == i)) {
                     selectedMaterialIndex = i;
                 }
             }
@@ -392,9 +549,9 @@ struct Application {
             if (ImGui::BeginTabBar("Tab##Inspector")) {
                 if (ImGui::BeginTabItem("Material")) {
                     if (selectedMaterialIndex != 0) {
-                        auto &emission = renderer->world.materials.MaterialEmission[selectedMaterialIndex];
-                        auto &emissionStrength = renderer->world.materials.MaterialEmissionStrength[selectedMaterialIndex];
-                        auto &baseColor = renderer->world.materials.MaterialBaseColor[selectedMaterialIndex];
+                        auto &emission = renderer->world->materials.MaterialEmission[selectedMaterialIndex];
+                        auto &emissionStrength = renderer->world->materials.MaterialEmissionStrength[selectedMaterialIndex];
+                        auto &baseColor = renderer->world->materials.MaterialBaseColor[selectedMaterialIndex];
                         if (ImGui::ColorPicker3("Emission", (float *) &emission)) {
                             needRedraw = true;
                         }
@@ -409,17 +566,17 @@ struct Application {
                 }
                 if (ImGui::BeginTabItem("Render")) {
                     bool enable = renderer->options & ENABLE_ATMOSPHERE_SCATTERING;
-                    if(ImGui::Checkbox("Atmospheric Scattering",&enable)){
-                        if(enable){
+                    if (ImGui::Checkbox("Atmospheric Scattering", &enable)) {
+                        if (enable) {
                             renderer->options |= ENABLE_ATMOSPHERE_SCATTERING;
-                        }else{
+                        } else {
                             renderer->options &= ~ENABLE_ATMOSPHERE_SCATTERING;
                         }
                         needRedraw = true;
                     }
-                    float theta = renderer->world.sunHeight / M_PI * 180.0;
+                    float theta = renderer->world->sunHeight / M_PI * 180.0;
                     if (ImGui::SliderFloat("Sun Height", &theta, 0.0f, 180.0f)) {
-                        renderer->world.sunHeight = theta / 180.0f * M_PI;
+                        renderer->world->sunHeight = theta / 180.0f * M_PI;
                         needRedraw = true;
                     }
                     ImGui::EndTabItem();
@@ -475,9 +632,11 @@ struct Application {
     }
 };
 
+
 int main(int argc, char **argv) {
     Application app;
     app.show();
+
     return 0;
 }
 
@@ -525,4 +684,31 @@ void setUpDockSpace() {
 
 
     ImGui::End();
+}
+
+void World::loadMinecraftMaterials() {
+    //stone
+    materialNames[1] = "stone";
+    materials.MaterialBaseColor[1] = vec4(112, 112, 112, 1) / 255.0f;
+    //grass
+    materialNames[2] = "grass";
+    materials.MaterialBaseColor[2] = vec4(127, 178, 56, 1) / 255.0f;
+
+    //dirt
+    materialNames[3] = "dir";
+    materials.MaterialBaseColor[3] = vec4(151, 109, 77, 1) / 255.0f;
+
+    //leaves
+    materialNames[18] = "leaves";
+    materials.MaterialBaseColor[18] = vec4(0, 124, 0, 1) / 255.0f;
+
+    //water
+    materialNames[8] = "water 1";
+    materials.MaterialBaseColor[8] = vec4(64, 64, 255, 1) / 255.0f;
+    materialNames[9] = "water 2";
+    materials.MaterialBaseColor[9] = vec4(64, 64, 255, 1) / 255.0f;
+
+    // wood
+    materialNames[17] = "wood";
+    materials.MaterialBaseColor[17] = vec4(143, 119, 72, 1) / 255.0f;
 }
