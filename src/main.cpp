@@ -16,9 +16,11 @@
 #include <examples/imgui_impl_glfw.h>
 #include <examples/imgui_impl_opengl3.h>
 #include <memory>
+#include <array>
+#include <sstream>
+#include <chrono>
 
 using namespace glm;
-double glfwMouseScrollY;
 
 struct Material {
     vec3 emission;
@@ -36,18 +38,31 @@ MessageCallback(GLenum source,
                 GLsizei length,
                 const GLchar *message,
                 const void *userParam) {
-    fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
-            (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""),
-            type, severity, message);
+    if (GL_DEBUG_SEVERITY_HIGH == severity)
+        fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
+                (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""),
+                type, severity, message);
 }
 
 
 #include "../shaders/compute-shader.h"
 
+void setUpDockSpace();
+
 struct World {
     std::vector<uint8_t> data;
     ivec3 worldDimension, alignedDimension;
     GLuint world;
+    GLuint materialsSSBO;
+#define MATERIAL_COUNT 256
+    struct Materials {
+        vec4 MaterialEmission[MATERIAL_COUNT];
+        vec4 MaterialBaseColor[MATERIAL_COUNT];
+        float MaterialRoughness[MATERIAL_COUNT] = {0};
+        float MaterialBetalness[MATERIAL_COUNT] = {0};
+        float MaterialSpecular[MATERIAL_COUNT] = {0};
+        float MaterialEmissionStrength[MATERIAL_COUNT] = {1};
+    } materials;
 
     void initData() {
 #pragma  omp parallel for default(none)
@@ -79,7 +94,9 @@ struct World {
                 }
             }
         }
-
+        glGenBuffers(1, &materialsSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, materialsSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Materials), NULL, GL_DYNAMIC_COPY);
     }
 
     explicit World(const ivec3 &worldDimension) : worldDimension(worldDimension) {
@@ -127,6 +144,7 @@ struct Renderer {
     bool prevMouseDown = false;
     int iTime = 0;
     vec2 eulerAngle = vec2(0, 0);
+    bool needRedraw = true;
 
     explicit Renderer() : world(ivec3(50, 50, 50)) {
     }
@@ -214,10 +232,21 @@ struct Renderer {
 
     void render(GLFWwindow *window) {
         {
+            if (needRedraw) {
+                iTime = 0;
+            }
             double xpos, ypos;
-            glfwGetCursorPos(window, &xpos, &ypos);
-            int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
-            if (state == GLFW_PRESS) {
+            auto &io = ImGui::GetIO();
+            xpos = io.MousePos.x;
+            ypos = io.MousePos.y;
+
+            auto windowPos = ImGui::GetWindowPos();
+            auto size = ImGui::GetWindowSize();
+
+            auto pos = io.MousePos;
+            bool pressed = io.MouseDown[1];
+            if (pressed && (pos.x >= windowPos.x && pos.y >= windowPos.y
+                            && pos.x < windowPos.x + size.x && pos.y < windowPos.y + size.y)) {
                 if (!prevMouseDown) {
                     mousePos = ivec2(xpos, ypos);
                     if (mousePos != prevMousePos) {
@@ -244,12 +273,11 @@ struct Renderer {
             cameraDirection = M;
             cameraOrigin = translate(vec3(tr.x, tr.y, -tr.z)) * cameraDirection * translate(vec3(0, 0, 3.5 * tr.z));
 
-            prevMouseDown = state == GLFW_PRESS;
+            prevMouseDown = pressed;
             lastFrameMousePos = ivec2(xpos, ypos);
         }
 
-        int w, h;
-        glfwGetFramebufferSize(window, &w, &h);
+        int w = 1280, h = 720;
         glUseProgram(program);
         glActiveTexture(GL_TEXTURE0 + 0);
         glBindTexture(GL_TEXTURE_3D, world.world);
@@ -260,7 +288,7 @@ struct Renderer {
         glBindTexture(GL_TEXTURE_2D, composed);
         glBindImageTexture(3, composed, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
         glUniform1i(glGetUniformLocation(program, "world"), 0);
-        glUniform2f(glGetUniformLocation(program, "iResolution"), 1280, 720);
+        glUniform2f(glGetUniformLocation(program, "iResolution"), w, h);
         glUniform3i(glGetUniformLocation(program, "worldDimension"),
                     world.worldDimension.x,
                     world.worldDimension.y,
@@ -268,10 +296,23 @@ struct Renderer {
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, world.materialsSSBO);
+        if (needRedraw) {
+            //printf("redraw\n");
+
+            GLvoid *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
+            memcpy(p, &world.materials, sizeof(World::Materials));
+            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+        }
+//        GLuint blockIndex = 0;
+//        blockIndex = glGetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "Materials");
+//        glShaderStorageBlockBinding(program, blockIndex, 4);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, world.materialsSSBO);
         glDispatchCompute(std::ceil(w / 16), std::ceil(h / 16), 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         if (iTime % 200 == 0)
             printf("pass = %d\n", iTime);
+        needRedraw = false;
     }
 };
 
@@ -284,11 +325,8 @@ struct Application {
             fprintf(stderr, "failed to init glfw");
             exit(1);
         }
-        window = glfwCreateWindow(1280, 720, "NanoVoxel", nullptr, nullptr);
+        window = glfwCreateWindow(1920, 1080, "NanoVoxel", nullptr, nullptr);
         glfwMakeContextCurrent(window);
-        glfwSetScrollCallback(window, [](GLFWwindow *window, double xoffset, double yoffset) {
-            glfwMouseScrollY = yoffset;
-        });
         glfwSwapInterval(0);
         if (0 != gl3wInit()) {
             fprintf(stderr, "failed to init gl3w");
@@ -332,11 +370,58 @@ struct Application {
 
     }
 
-    void displayUI() {
-        if (ImGui::Begin("View", nullptr, ImGuiWindowFlags_NoScrollWithMouse)) {
-            ImGui::Image((void *) renderer->composed, ImVec2(1280, 720));
+    int selectedMaterialIndex = 0;
+
+    void showEditor() {
+        if (ImGui::Begin("Explorer")) {
+            for (int i = 1; i < MATERIAL_COUNT; i++) {
+                std::ostringstream s;
+                s << "Material " << i;
+                auto name = s.str();
+                if (ImGui::Selectable(name.c_str(), selectedMaterialIndex == i)) {
+                    selectedMaterialIndex = i;
+                }
+            }
             ImGui::End();
         }
+        if (ImGui::Begin("Inspector")) {
+            auto &needRedraw = renderer->needRedraw;
+            if (ImGui::BeginTabBar("Tab##Inspector")) {
+                if (ImGui::BeginTabItem("Material")) {
+                    if (selectedMaterialIndex != 0) {
+                        auto &emission = renderer->world.materials.MaterialEmission[selectedMaterialIndex];
+                        auto &emissionStrength = renderer->world.materials.MaterialEmissionStrength[selectedMaterialIndex];
+                        auto &baseColor = renderer->world.materials.MaterialBaseColor[selectedMaterialIndex];
+                        if (ImGui::ColorPicker3("Emission", (float *) &emission)) {
+                            needRedraw = true;
+                        }
+                        if (ImGui::InputFloat("Emission Strength", &emissionStrength)) {
+                            needRedraw = true;
+                        }
+                        if (ImGui::ColorPicker3("Base Color", (float *) &baseColor)) {
+                            needRedraw = true;
+                        }
+                    }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Render")) {
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+            ImGui::End();
+        }
+    }
+
+    void displayUI() {
+        setUpDockSpace();
+
+        if (ImGui::Begin("View", nullptr, ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
+            renderer->render(window);
+            ImGui::Image(reinterpret_cast<void *> (renderer->composed), ImVec2(1280, 720));
+            ImGui::End();
+        }
+        showEditor();
     }
 
     void show() {
@@ -347,7 +432,7 @@ struct Application {
             glViewport(0, 0, display_w, display_h);
             glClearColor(0, 0, 0, 0);
             glClear(GL_COLOR_BUFFER_BIT);
-            renderer->render(window);
+
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
@@ -377,4 +462,50 @@ int main(int argc, char **argv) {
     Application app;
     app.show();
     return 0;
+}
+
+void setUpDockSpace() {
+    static bool opt_fullscreen_persistant = true;
+    bool opt_fullscreen = opt_fullscreen_persistant;
+    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+
+    // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
+    // because it would be confusing to have two docking targets within each others.
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    if (opt_fullscreen) {
+        ImGuiViewport *viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                        ImGuiWindowFlags_NoMove;
+        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    }
+
+    // When using ImGuiDockNodeFlags_PassthruCentralNode, DockSpace() will render our background and handle the pass-thru hole, so we ask Begin() to not render a background.
+    if (dockspace_flags & ImGuiDockNodeFlags_PassthruCentralNode)
+        window_flags |= ImGuiWindowFlags_NoBackground;
+
+    // Important: note that we proceed even if Begin() returns false (aka window is collapsed).
+    // This is because we want to keep our DockSpace() active. If a DockSpace() is inactive,
+    // all active windows docked into it will lose their parent and become undocked.
+    // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
+    // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("DockSpace", nullptr, window_flags);
+    ImGui::PopStyleVar();
+
+    if (opt_fullscreen)
+        ImGui::PopStyleVar(2);
+
+    // DockSpace
+    ImGuiIO &io = ImGui::GetIO();
+
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+
+
+    ImGui::End();
 }

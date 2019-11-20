@@ -18,6 +18,15 @@ struct Material {
     float metalness;
     float specular;
 };
+#define MATERIAL_COUNT 256
+layout(std430, binding = 4) readonly buffer Materials{
+    vec4 MaterialEmission[MATERIAL_COUNT];
+    vec4 MaterialBaseColor[MATERIAL_COUNT];
+    float MaterialRoughness[MATERIAL_COUNT];
+    float MaterialBetalness[MATERIAL_COUNT];
+    float MaterialSpecular[MATERIAL_COUNT];
+    float MaterialEmissionStrength[MATERIAL_COUNT];
+};
 
 
 const float M_PI = 3.1415926535;
@@ -105,12 +114,14 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 			// find normal
 			isct.t = distance + t;
 			isct.n = -sign(rd) * mask;
-            isct.mat.baseColor = vec3(83, 135, 219)/255.0;
-            if(mat == 2){
-                isct.mat.emission = vec3(3);
-            }else{
-                isct.mat.emission = vec3(0);
-            }
+           //isct.mat.baseColor = vec3(83, 135, 219)/255.0;
+           //if(mat == 2){
+           //    isct.mat.emission = vec3(3);
+           //}else{
+           //    isct.mat.emission = vec3(0);
+           //}
+            isct.mat.baseColor = MaterialBaseColor[mat].rgb;
+            isct.mat.emission = MaterialEmission[mat].rgb *  MaterialEmissionStrength[mat];
 			return true;
 		}
 		if (tMax.x < tMax.y) {
@@ -146,15 +157,16 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 }
 
 bool intersect(vec3 ro, vec3 rd, out Intersection isct){
-    if(intersect1(ro, rd,isct)){
+     float t = ro.y / -rd.y;
+    if(intersect1(ro, rd,isct) && (t < RayBias || isct.t < t)){
         return true;
     }
-    float t = ro.y / -rd.y;
     if(t < RayBias)
         return false;
     isct.t = t;
     isct.p = ro + t * rd;
     isct.n = vec3(0,1,0);
+    isct.mat.emission = vec3(0);
     isct.mat.baseColor = vec3(1);
     return true;
 }
@@ -226,7 +238,18 @@ vec3 cosineHemisphereSampling(vec2 u){
 vec3 LiBackground(vec3 o, vec3 d){
     return vec3(0);
 }
-#define AO
+
+vec3 sampleBSDF(const Material mat, out vec3 wi, out float pdf){
+    return vec3(0);
+}
+vec3 evaluateBSDF(const Material mat, const vec3 wo, const vec3 wi){
+    return vec3(0);
+}
+float evaluatePdf(const Material mat, const vec3 wo, const vec3 wi){
+    return 0.0f;
+}
+
+//#define AO
 #ifdef AO
 vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     Intersection isct;
@@ -260,9 +283,14 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
         L += beta * isct.mat.emission;
         LocalFrame frame;
         computeLocalFrame(isct.n, frame);
+        vec3 wo = worldToLocal(-d, frame);
         vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
+        if(wo.y * wi.y <0.0f){
+            wi.y *= -1.0;
+        }
         wi = localToWorld(wi, frame);
-        o = isct.p + RayBias * wi;
+
+        o = isct.p;
         d = wi;
         float pdf = abs(dot(isct.n, wi)) / M_PI;
         beta *= isct.mat.baseColor * abs(dot(isct.n, wi)) / pdf;
