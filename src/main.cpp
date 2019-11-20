@@ -426,7 +426,7 @@ struct Renderer {
     mat4 cameraDirection, cameraOrigin;
     GLuint sample; // texture for 1 spp
     GLuint accum; // accumlated sample
-    GLuint post; // post processor
+    GLuint composed; // post processor
     ivec2 mousePos, prevMousePos, lastFrameMousePos;
     bool prevMouseDown = false;
     int iTime = 0;
@@ -470,16 +470,6 @@ struct Renderer {
         glDeleteShader(frag);
         std::cout << "Shader compiled without complaint" << std::endl;
 
-//        GLuint FBO;
-//        glGenFramebuffers(1, &FBO);
-//        glGenTextures(1, &sample);
-//        glBindTexture(GL_TEXTURE_2D, sample);
-//        glBindFramebuffer(GL_FRAMEBUFFER, FBO);
-//        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-//            std::cerr << "?" << std::endl;
-//            exit(1);
-//        }
-
         glGenTextures(1, &sample);
         glBindTexture(GL_TEXTURE_2D, sample);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -492,6 +482,16 @@ struct Renderer {
 
         glGenTextures(1, &accum);
         glBindTexture(GL_TEXTURE_2D, accum);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1280, 720, 0, GL_RGBA,
+                     GL_FLOAT, NULL);
+
+        glGenTextures(1, &composed);
+        glBindTexture(GL_TEXTURE_2D, composed);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -664,32 +664,37 @@ struct Application {
 
     }
 
+    void displayUI() {
+        if(ImGui::Begin("View")){
+            ImGui::Image((void*)renderer->accum,ImVec2(800,600));
+            ImGui::End();
+        }
+    }
+
     void show() {
-        ImGuiIO& io = ImGui::GetIO();
+        ImGuiIO &io = ImGui::GetIO();
         while (!glfwWindowShouldClose(window)) {
-
-
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-
-            ImGui::Render();
             int display_w, display_h;
             glfwGetFramebufferSize(window, &display_w, &display_h);
             glViewport(0, 0, display_w, display_h);
-            glClearColor(0,0,0,0);
+            glClearColor(0, 0, 0, 0);
             glClear(GL_COLOR_BUFFER_BIT);
+            renderer->render(window);
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            displayUI();
+            ImGui::Render();
+
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-            {
-                GLFWwindow* backup_current_context = glfwGetCurrentContext();
+            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+                GLFWwindow *backup_current_context = glfwGetCurrentContext();
                 ImGui::UpdatePlatformWindows();
                 ImGui::RenderPlatformWindowsDefault();
                 glfwMakeContextCurrent(backup_current_context);
             }
-            /* Render here */
-            glClear(GL_COLOR_BUFFER_BIT);
-            renderer->render(window);
+
+
             /* Swap front and back buffers */
             glfwSwapBuffers(window);
 
