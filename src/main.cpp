@@ -19,16 +19,13 @@
 #include <array>
 #include <sstream>
 #include <chrono>
+#include <enkimi.h>
+#include <miniz.h>
 
 using namespace glm;
 
-struct Material {
-    vec3 emission;
-    vec3 baseColor;
-    float roughness;
-    float metalness;
-    float specular;
-};
+#define ENABLE_ATMOSPHERE_SCATTERING 0x1
+
 
 void GLAPIENTRY
 MessageCallback(GLenum source,
@@ -46,6 +43,7 @@ MessageCallback(GLenum source,
 
 
 #include "../shaders/compute-shader.h"
+#include "../shaders/external-shaders.h"
 
 void setUpDockSpace();
 
@@ -54,6 +52,7 @@ struct World {
     ivec3 worldDimension, alignedDimension;
     GLuint world;
     GLuint materialsSSBO;
+    float sunHeight = 0.0f;
 #define MATERIAL_COUNT 256
     struct Materials {
         vec4 MaterialEmission[MATERIAL_COUNT];
@@ -71,15 +70,6 @@ struct World {
             for (int y = 0; y < worldDimension.y; y++) {
                 for (int z = 0; z < worldDimension.z; z++) {
                     vec3 p = vec3(x, y, z);// / vec3(worldDimension);
-                    //p = 2.0f * p - vec3(1);
-//                    if (length(p) < 0.4) {
-//                        if(abs(p.x)<0.1)
-//                            (*this)(x, y, z) = 2;
-//                        else
-//                            (*this)(x, y, z) = 1;
-//                    } else {
-//                        (*this)(x, y, z) = 0;
-//                    }
                     p *= 0.1f;
                     auto n = perlin.noise0_1(p.x, p.y, p.z);
                     if (0.6 < n && n < 0.8) {
@@ -145,6 +135,7 @@ struct Renderer {
     int iTime = 0;
     vec2 eulerAngle = vec2(0, 0);
     bool needRedraw = true;
+    uint32_t options = 0;
 
     explicit Renderer() : world(ivec3(50, 50, 50)) {
     }
@@ -153,7 +144,13 @@ struct Renderer {
         std::vector<char> error(4096, 0);
         auto shader = glCreateShader(GL_COMPUTE_SHADER);
         GLint success;
-        glShaderSource(shader, 1, &computeShaderSource, nullptr);
+        const char *version = "#version 430";
+        const char *src[] = {
+                version,
+                externalShaderSource,
+                computeShaderSource
+        };
+        glShaderSource(shader, 3, src, nullptr);
         glCompileShader(shader);
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
@@ -276,7 +273,7 @@ struct Renderer {
             prevMouseDown = pressed;
             lastFrameMousePos = ivec2(xpos, ypos);
         }
-
+        vec3 sunPos = vec3(0, cos(world.sunHeight) * 0.3 + 0.2, -1);
         int w = 1280, h = 720;
         glUseProgram(program);
         glActiveTexture(GL_TEXTURE0 + 0);
@@ -294,8 +291,10 @@ struct Renderer {
                     world.worldDimension.y,
                     world.worldDimension.z);
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
+        glUniform1ui(glGetUniformLocation(program, "options"), options);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
+        glUniform3fv(glGetUniformLocation(program, "sunPos"), 1, (float *) &sunPos);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, world.materialsSSBO);
         if (needRedraw) {
             //printf("redraw\n");
@@ -405,6 +404,20 @@ struct Application {
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Render")) {
+                    bool enable = renderer->options & ENABLE_ATMOSPHERE_SCATTERING;
+                    if(ImGui::Checkbox("Atmospheric Scattering",&enable)){
+                        if(enable){
+                            renderer->options |= ENABLE_ATMOSPHERE_SCATTERING;
+                        }else{
+                            renderer->options &= ~ENABLE_ATMOSPHERE_SCATTERING;
+                        }
+                        needRedraw = true;
+                    }
+                    float theta = renderer->world.sunHeight / M_PI * 180.0;
+                    if (ImGui::SliderFloat("Sun Height", &theta, 0.0f, 180.0f)) {
+                        renderer->world.sunHeight = theta / 180.0f * M_PI;
+                        needRedraw = true;
+                    }
                     ImGui::EndTabItem();
                 }
                 ImGui::EndTabBar();

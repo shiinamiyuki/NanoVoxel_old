@@ -1,5 +1,4 @@
-const char *computeShaderSource = R"(
-#version 430
+const char *computeShaderSource = R"(#line 0
 layout(local_size_x = 16, local_size_y = 16,local_size_z = 1) in;
 layout(binding = 0) uniform sampler3D world;
 layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
@@ -10,6 +9,10 @@ uniform mat4 cameraOrigin;
 uniform mat4 cameraDirection;
 uniform ivec3 worldDimension;
 uniform int iTime;
+uniform vec3 sunPos;
+uniform uint options;
+
+#define ENABLE_ATMOSPHERE_SCATTERING 0x1
 
 struct Material {
     vec3 emission;
@@ -111,15 +114,8 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 
 		if (mat > 0 && t >= RayBias) {
 			isct.p = p0 + rd* t;
-			// find normal
 			isct.t = distance + t;
 			isct.n = -sign(rd) * mask;
-           //isct.mat.baseColor = vec3(83, 135, 219)/255.0;
-           //if(mat == 2){
-           //    isct.mat.emission = vec3(3);
-           //}else{
-           //    isct.mat.emission = vec3(0);
-           //}
             isct.mat.baseColor = MaterialBaseColor[mat].rgb;
             isct.mat.emission = MaterialEmission[mat].rgb *  MaterialEmissionStrength[mat];
 			return true;
@@ -236,7 +232,28 @@ vec3 cosineHemisphereSampling(vec2 u){
 }
 
 vec3 LiBackground(vec3 o, vec3 d){
-    return vec3(0);
+    if(0 != (options & ENABLE_ATMOSPHERE_SCATTERING)){
+        float theta = 45.0/180.0 * M_PI;
+        vec3 color = atmosphere(
+            normalize(d),                   // normalized ray direction
+            vec3(0,6372e3,0),               // ray origin
+            sunPos,                        // position of the sun
+            22.0,                           // intensity of the sun
+            6371e3,                         // radius of the planet in meters
+            6471e3,                         // radius of the atmosphere in meters
+            vec3(5.5e-6, 13.0e-6, 22.4e-6), // Rayleigh scattering coefficient
+            21e-6,                          // Mie scattering coefficient
+            8e3,                            // Rayleigh scale height
+            1.2e3,                          // Mie scale height
+            0.758                           // Mie preferred scattering direction
+        );
+
+        // Apply exposure.
+        color = 1.0 - exp(-1.0 * color);
+        return color;
+    }else{
+        return vec3(0);
+    }
 }
 
 vec3 sampleBSDF(const Material mat, out vec3 wi, out float pdf){
@@ -293,7 +310,7 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
         o = isct.p;
         d = wi;
         float pdf = abs(dot(isct.n, wi)) / M_PI;
-        beta *= isct.mat.baseColor * abs(dot(isct.n, wi)) / pdf;
+        beta *= isct.mat.baseColor / M_PI * abs(dot(isct.n, wi)) / pdf;
     }
     return L;
 }
