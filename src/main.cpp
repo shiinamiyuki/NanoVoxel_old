@@ -41,21 +41,14 @@ MessageCallback(GLenum source,
             type, severity, message);
 }
 
-const char *vertexShaderSource = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
 
-void main()
-{
-    gl_Position = vec4(aPos, 1.0);
-}
-)";
-const char *fragmentShaderSource = R"(
-#version 420 core
-out vec4 FragColor;
+const char *computeShaderSource = R"(
+#version 430
+layout(local_size_x = 1, local_size_y = 1) in;
 layout(binding = 0) uniform sampler3D world;
 layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
 layout(binding = 2, rgba32f)  uniform image2D seeds;
+layout(binding = 3, rgba32f)  writeonly uniform image2D composedImage;
 uniform vec2 iResolution;
 uniform mat4 cameraOrigin;
 uniform mat4 cameraDirection;
@@ -325,13 +318,14 @@ vec3 removeNaN(vec3 v){
     return mix(v, vec3(0), isnan(v));
 }
 void main() {
-    vec2 uv = gl_FragCoord.xy / iResolution;
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    vec2 uv = pixelCoord.xy / iResolution;
     Sampler sampler;
     sampler.dimension = 0;
-
-    sampler.seed = floatBitsToUint(imageLoad(seeds, ivec2(gl_FragCoord.xy)).r);
+    sampler.seed = floatBitsToUint(imageLoad(seeds, pixelCoord).r);
 
     uv = 2.0 * uv - vec2(1.0);
+    uv.y *= -1.0f;
     uv.x *= iResolution.x / iResolution.y;
     vec4 _o = (cameraOrigin * vec4(vec3(0), 1));
     vec3 o = _o.xyz / _o.w;
@@ -339,12 +333,12 @@ void main() {
     float z = 1.0 / tan(fov / 2.0);
     vec3 d = normalize(mat3(cameraDirection) * normalize(vec3(uv, z) - vec3(0,0,0)));
     vec4 color = vec4(removeNaN(Li(o, d, sampler)), 1.0);
-    vec4 prevColor = imageLoad(accumlatedImage,  ivec2(gl_FragCoord.xy));
+    vec4 prevColor = imageLoad(accumlatedImage,  pixelCoord);
     if(iTime > 0)
         color += prevColor;
-    FragColor = vec4(pow(color.rgb / color.a,vec3(1.0/2.2)), 1.0);
-    imageStore(accumlatedImage,  ivec2(gl_FragCoord.xy), color);
-    imageStore(seeds, ivec2(gl_FragCoord.xy), vec4(uintBitsToFloat(sampler.seed)));
+    imageStore(composedImage, pixelCoord, vec4(pow(color.rgb / color.a,vec3(1.0/2.2)), 1.0));
+    imageStore(accumlatedImage,  pixelCoord, color);
+    imageStore(seeds, pixelCoord, vec4(uintBitsToFloat(sampler.seed)));
 }
 )";
 
@@ -437,28 +431,19 @@ struct Renderer {
 
     void compileShader() {
         std::vector<char> error(4096, 0);
-        auto vert = glCreateShader(GL_VERTEX_SHADER);
-        auto frag = glCreateShader(GL_FRAGMENT_SHADER);
+        auto shader = glCreateShader(GL_COMPUTE_SHADER);
         GLint success;
-        glShaderSource(frag, 1, &fragmentShaderSource, nullptr);
-        glCompileShader(frag);
-        glGetShaderiv(frag, GL_COMPILE_STATUS, &success);
+        glShaderSource(shader, 1, &computeShaderSource, nullptr);
+        glCompileShader(shader);
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
-            glGetShaderInfoLog(frag, error.size(), nullptr, error.data());
-            std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << error.data() << std::endl;
+            glGetShaderInfoLog(shader, error.size(), nullptr, error.data());
+            std::cout << "ERROR::SHADER::COMPUTE::COMPILATION_FAILED\n" << error.data() << std::endl;
             exit(1);
         };
-        glShaderSource(vert, 1, &vertexShaderSource, nullptr);
-        glCompileShader(vert);
-        glGetShaderiv(vert, GL_COMPILE_STATUS, &success);
-        if (!success) {
-            glGetShaderInfoLog(vert, error.size(), nullptr, error.data());
-            std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << error.data() << std::endl;
-            exit(1);
-        }
+
         program = glCreateProgram();
-        glAttachShader(program, vert);
-        glAttachShader(program, frag);
+        glAttachShader(program, shader);
         glLinkProgram(program);
         glGetProgramiv(program, GL_LINK_STATUS, &success);
         if (!success) {
@@ -466,8 +451,7 @@ struct Renderer {
             std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << error.data() << std::endl;
             exit(1);
         }
-        glDeleteShader(vert);
-        glDeleteShader(frag);
+        glDeleteShader(shader);
         std::cout << "Shader compiled without complaint" << std::endl;
 
         glGenTextures(1, &sample);
@@ -589,6 +573,8 @@ struct Renderer {
         glBindImageTexture(1, accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
         glBindTexture(GL_TEXTURE_2D, seed);
         glBindImageTexture(2, seed, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+        glBindTexture(GL_TEXTURE_2D, composed);
+        glBindImageTexture(3, composed, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
         glUniform1i(glGetUniformLocation(program, "world"), 0);
         glUniform2f(glGetUniformLocation(program, "iResolution"), w, h);
         glUniform3i(glGetUniformLocation(program, "worldDimension"),
@@ -598,7 +584,7 @@ struct Renderer {
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDispatchCompute(w, h, 1);
 
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         if (iTime % 200 == 0)
@@ -665,8 +651,8 @@ struct Application {
     }
 
     void displayUI() {
-        if(ImGui::Begin("View")){
-            ImGui::Image((void*)renderer->accum,ImVec2(800,600));
+        if (ImGui::Begin("View")) {
+            ImGui::Image((void *) renderer->composed, ImVec2(800, 600));
             ImGui::End();
         }
     }
