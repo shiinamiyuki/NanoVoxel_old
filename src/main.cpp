@@ -13,6 +13,7 @@
 #include <algorithm>
 
 using namespace glm;
+double glfwMouseScrollY;
 
 struct Material {
     vec3 baseColor;
@@ -50,7 +51,8 @@ layout(binding = 0) uniform sampler3D world;
 layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
 
 uniform vec2 iResolution;
-uniform mat4 cameraTransform;
+uniform mat4 cameraOrigin;
+uniform mat4 cameraDirection;
 uniform ivec3 worldDimension;
 uniform int iTime;
 
@@ -101,7 +103,7 @@ struct Intersection{
     vec3 p;
 };
 bool insideWorld(vec3 p){
-    return all(lessThan(p, vec3(worldDimension))) && all(greaterThanEqual(p, vec3(-2)));
+    return all(lessThan(p, vec3(worldDimension)+vec3(1))) && all(greaterThanEqual(p, vec3(-2)));
 }
 int map(vec3 p){
     return int(texelFetch(world, ivec3(p), 0).r * 255.0);
@@ -265,13 +267,12 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     computeLocalFrame(isct.n, frame);
     vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
     wi = localToWorld(wi, frame);
-    o = isct.p;//+ RayBias * wi;
+    o = isct.p + RayBias * wi;
     d = wi;
-    if(!intersect(o, d, isct)){
+    if(!intersect(o, d, isct) || isct.t > 30.0){
         return vec3(1);
     }
     return vec3(0);
-    //return vec3(0.5) + 0.5 * isct.n;
 }
 
 void main() {
@@ -282,8 +283,9 @@ void main() {
 
     uv = 2.0 * uv - vec2(1.0);
     uv.x *= iResolution.x / iResolution.y;
-    vec3 o = (cameraTransform * vec4(vec3(0), 1)).xyz;
-    vec3 d = mat3(cameraTransform) * normalize(vec3(uv, 1) - vec3(0));
+    vec4 _o = (cameraOrigin * vec4(vec3(0), 1));
+    vec3 o = _o.xyz / _o.w;
+    vec3 d = normalize(mat3(cameraDirection) * normalize(vec3(uv, 1) - vec3(0)));
     vec4 color = vec4(Li(o, d, sampler), 1.0);
     vec4 prevColor = imageLoad(accumlatedImage,  ivec2(gl_FragCoord.xy));
     if(iTime > 0)
@@ -351,17 +353,16 @@ struct Renderer {
     GLint program;
     GLuint VBO;
     World world;
-    mat4 cameraTransform;
+    mat4 cameraDirection, cameraOrigin;
     GLuint sample; // texture for 1 spp
     GLuint accum; // accumlated sample
     GLuint post; // post processor
     ivec2 mousePos, prevMousePos, lastFrameMousePos;
     bool prevMouseDown = false;
-    mat4 prevCameraTransform;
     int iTime = 0;
+    vec2 eulerAngle = vec2(0,0);
 
     explicit Renderer() : world(ivec3(50, 50, 50)) {
-
     }
 
     void compileShader() {
@@ -451,7 +452,8 @@ struct Renderer {
 
     void setUpWorld() {
         world.setUpTexture();
-        prevCameraTransform = cameraTransform = identity<mat4>();
+        cameraOrigin = translate(vec3(20, 20, -20));
+        cameraDirection = identity<mat4>();//<=inverse(M);
     }
 
     void render(GLFWwindow *window) {
@@ -460,21 +462,32 @@ struct Renderer {
             glfwGetCursorPos(window, &xpos, &ypos);
             int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
             if (state == GLFW_PRESS) {
-                if (!prevMouseDown)
+                if (!prevMouseDown) {
                     mousePos = ivec2(xpos, ypos);
+                    if (mousePos != prevMousePos) {
+                        iTime = 0;
+                    }
+                }
                 auto p = ivec2(xpos, ypos);
                 if (lastFrameMousePos != p) {
                     iTime = 0;
+                    auto rot = (vec2(p) - vec2(lastFrameMousePos)) / 300.0f * float(M_PI);
+                    eulerAngle += rot;
+
                 }
-                auto rot = (vec2(p) - vec2(prevMouseDown)) / 300.0f * float(M_PI);
-                auto M = rotate(rot.y, vec3(1, 0, 0));
-                M *= rotate(rot.x, vec3(0, 1, 0));
-                cameraTransform = translate(vec3(world.worldDimension) / 2.0f) * M * translate(vec3(0, 0, -20));
+
             } else {
                 if (prevMouseDown) {
-                    prevMousePos = mousePos;
+                    prevMousePos = lastFrameMousePos;
                 }
             }
+            auto M = rotate(eulerAngle.x, vec3(0, 1, 0));
+            M *= rotate(eulerAngle.y, vec3(1, 0, 0));
+            auto tr = vec3(world.worldDimension) * 0.5f;
+            tr.z *= -1.0f;
+            cameraDirection = M;
+            cameraOrigin = translate(vec3(tr.x,tr.y,-tr.z)) * cameraDirection * translate(vec3(0, 0, tr.z));
+
             prevMouseDown = state == GLFW_PRESS;
             lastFrameMousePos = ivec2(xpos, ypos);
         }
@@ -495,7 +508,8 @@ struct Renderer {
                     world.worldDimension.y,
                     world.worldDimension.z);
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
-        glUniformMatrix4fv(glGetUniformLocation(program, "cameraTransform"), 1, GL_FALSE, &cameraTransform[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -509,6 +523,9 @@ int main(int argc, char **argv) {
     }
     GLFWwindow *window = glfwCreateWindow(1280, 720, "NanoVoxel", nullptr, nullptr);
     glfwMakeContextCurrent(window);
+    glfwSetScrollCallback(window,[](GLFWwindow*window, double xoffset, double yoffset){
+        glfwMouseScrollY = yoffset;
+    });
 
     if (0 != gl3wInit()) {
         fprintf(stderr, "failed to init gl3w");
