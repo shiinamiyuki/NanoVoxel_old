@@ -64,7 +64,7 @@ struct World {
     } materials;
 
     void initData() {
-#pragma  omp parallel for default(none)
+//#pragma  omp parallel for default(none)
         for (int x = 0; x < worldDimension.x; x++) {
             siv::PerlinNoise perlin;
             for (int y = 0; y < worldDimension.y; y++) {
