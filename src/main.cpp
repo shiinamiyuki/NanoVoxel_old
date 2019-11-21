@@ -22,6 +22,9 @@
 #include <enkimi.h>
 #include <miniz.h>
 #include <optional>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 using namespace glm;
 
@@ -56,13 +59,13 @@ struct World {
     GLuint world;
     GLuint materialsSSBO;
     float sunHeight = 0.0f;
+    float sunPhi = 0.0f;
 #define MATERIAL_COUNT 256
     struct Materials {
         vec4 MaterialEmission[MATERIAL_COUNT];
         vec4 MaterialBaseColor[MATERIAL_COUNT];
         float MaterialRoughness[MATERIAL_COUNT] = {0};
-        float MaterialBetalness[MATERIAL_COUNT] = {0};
-        float MaterialSpecular[MATERIAL_COUNT] = {0};
+        float MaterialMetallic[MATERIAL_COUNT] = {0};
         float MaterialEmissionStrength[MATERIAL_COUNT] = {1};
     } materials;
     std::string materialNames[MATERIAL_COUNT];
@@ -132,141 +135,151 @@ struct World {
     }
 };
 
-std::optional<std::pair<ivec3, ivec3>> getWorldBound(const std::string &filename) {
+std::optional<std::pair<ivec3, ivec3>> getWorldBound(const std::vector<std::string> &filenames) {
     // open the region file
-    FILE *fp = fopen(filename.c_str(), "rb");
-    if (!fp) {
-        printf("failed to open file\n");
-        return {};
-    }
-
-    // output file
-    FILE *fpOutput = stdout;//fopen("output.txt", "w");
-    if (!fpOutput) {
-        printf("failed to open output file\n");
-        return {};;
-    }
-
-    enkiRegionFile regionFile = enkiRegionFileLoad(fp);
     ivec3 worldMin(std::numeric_limits<int>::max()), worldMax(std::numeric_limits<int>::min());
-    for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
-        enkiNBTDataStream stream;
-        enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
-        if (stream.dataLength) {
-            enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
-            enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
-            ivec3 chunkPos = ivec3(chunkOriginPos.x,
-                                   chunkOriginPos.y, chunkOriginPos.z);
-            worldMin = min(worldMin, chunkPos);
-            worldMax = max(worldMax, chunkPos);
+    for (const auto &filename:filenames) {
+        FILE *fp = fopen(filename.c_str(), "rb");
+        if (!fp) {
+            printf("failed to open file\n");
+            return {};
+        }
+
+        // output file
+        FILE *fpOutput = stdout;//fopen("output.txt", "w");
+        if (!fpOutput) {
+            printf("failed to open output file\n");
+            return {};;
+        }
+
+        enkiRegionFile regionFile = enkiRegionFileLoad(fp);
+
+        for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
+            enkiNBTDataStream stream;
+            enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
+            if (stream.dataLength) {
+                enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
+                enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
+                ivec3 chunkPos = ivec3(chunkOriginPos.x,
+                                       chunkOriginPos.y, chunkOriginPos.z);
+
 //            fprintf(fpOutput, "Chunk at xyz{ %d, %d, %d }  Number of sections: %d \n", chunkOriginPos.x,
 //                    chunkOriginPos.y, chunkOriginPos.z, aChunk.countOfSections);
 
-            // iterate through chunk and count non 0 voxels as a demo
-            int64_t numVoxels = 0;
-            for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
-                if (aChunk.sections[section]) {
-                    enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
+                // iterate through chunk and count non 0 voxels as a demo
+                int64_t numVoxels = 0;
+                for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
+                    if (aChunk.sections[section]) {
+                        enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
 
-                    enkiMICoordinate sPos;
-                    // note order x then z then y iteration for cache efficiency
-                    for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
-                        for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
-                            for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
-                                uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
-                                if (voxel) {
-                                    ++numVoxels;
+                        enkiMICoordinate sPos;
+                        // note order x then z then y iteration for cache efficiency
+                        for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
+                            for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
+                                for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
+                                    uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
+
+                                    if (voxel) {
+                                        auto p = ivec3(sPos.x, sPos.y, sPos.z) +
+                                                 ivec3(sectionOrigin.x, sectionOrigin.y, sectionOrigin.z);
+                                        worldMin = min(worldMin, p);
+                                        worldMax = max(worldMax, p);
+                                        ++numVoxels;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
+
+                enkiNBTRewind(&stream);
+                // PrintStreamStructureToFile(&stream, fpOutput);
             }
-            //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
-
-            enkiNBTRewind(&stream);
-            // PrintStreamStructureToFile(&stream, fpOutput);
+            enkiNBTFreeAllocations(&stream);
         }
-        enkiNBTFreeAllocations(&stream);
+
+        enkiRegionFileFreeAllocations(&regionFile);
+
+        printf("%d %d %d  to %d %d %d\n", worldMin.x, worldMin.y, worldMin.z, worldMax.x, worldMax.y, worldMax.z);
+        fclose(fp);
     }
-
-    enkiRegionFileFreeAllocations(&regionFile);
-
-    printf("%d %d %d  to %d %d %d\n", worldMin.x, worldMin.y, worldMin.z, worldMax.x, worldMax.y, worldMax.z);
-    fclose(fp);
-    return std::make_pair(worldMin, worldMax + ivec3(16, 256, 16));
+    return std::make_pair(worldMin, worldMax);
 }
 
-std::shared_ptr<World> McLoader(const std::string &filename) {
-    auto bound = getWorldBound(filename);
+std::shared_ptr<World> McLoader(const std::vector<std::string> &filenames) {
+    auto bound = getWorldBound(filenames);
     if (!bound) {
-        return nullptr;
-    }
-    // open the region file
-    FILE *fp = fopen(filename.c_str(), "rb");
-    if (!fp) {
-        printf("failed to open file\n");
-        return nullptr;
-    }
-
-    // output file
-    FILE *fpOutput = stdout;//fopen("output.txt", "w");
-    if (!fpOutput) {
-        printf("failed to open output file\n");
         return nullptr;
     }
     auto worldMin = bound.value().first;
     auto worldMax = bound.value().second;
-
     auto world = std::make_shared<World>(worldMax - worldMin);
     printf("world size %d %d %d\n", world->worldDimension.x, world->worldDimension.y, world->worldDimension.z);
-    enkiRegionFile regionFile = enkiRegionFileLoad(fp);
+    // open the region file
+    for (const auto &filename : filenames) {
+        FILE *fp = fopen(filename.c_str(), "rb");
+        if (!fp) {
+            printf("failed to open file\n");
+            return nullptr;
+        }
 
-    for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
-        enkiNBTDataStream stream;
-        enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
-        if (stream.dataLength) {
-            enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
-            enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
-            ivec3 chunkPos = ivec3(chunkOriginPos.x,
-                                   chunkOriginPos.y, chunkOriginPos.z);
+        // output file
+        FILE *fpOutput = stdout;//fopen("output.txt", "w");
+        if (!fpOutput) {
+            printf("failed to open output file\n");
+            return nullptr;
+        }
+
+
+        enkiRegionFile regionFile = enkiRegionFileLoad(fp);
+
+        for (int i = 0; i < ENKI_MI_REGION_CHUNKS_NUMBER; i++) {
+            enkiNBTDataStream stream;
+            enkiInitNBTDataStreamForChunk(regionFile, i, &stream);
+            if (stream.dataLength) {
+                enkiChunkBlockData aChunk = enkiNBTReadChunk(&stream);
+                enkiMICoordinate chunkOriginPos = enkiGetChunkOrigin(&aChunk); // y always 0
+                ivec3 chunkPos = ivec3(chunkOriginPos.x,
+                                       chunkOriginPos.y, chunkOriginPos.z);
 
 //            fprintf(fpOutput, "Chunk at xyz{ %d, %d, %d }  Number of sections: %d \n", chunkOriginPos.x,
 //                    chunkOriginPos.y, chunkOriginPos.z, aChunk.countOfSections);
 
-            // iterate through chunk and count non 0 voxels as a demo
-            int64_t numVoxels = 0;
-            for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
-                if (aChunk.sections[section]) {
-                    enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
+                // iterate through chunk and count non 0 voxels as a demo
+                int64_t numVoxels = 0;
+                for (int section = 0; section < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++section) {
+                    if (aChunk.sections[section]) {
+                        enkiMICoordinate sectionOrigin = enkiGetChunkSectionOrigin(&aChunk, section);
 
-                    enkiMICoordinate sPos;
-                    // note order x then z then y iteration for cache efficiency
-                    for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
-                        for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
-                            for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
-                                uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
-                                auto p = ivec3(sPos.x, sPos.y, sPos.z) +
-                                         ivec3(sectionOrigin.x, sectionOrigin.y, sectionOrigin.z) - worldMin;
-                                (*world)(p) = voxel;
+                        enkiMICoordinate sPos;
+                        // note order x then z then y iteration for cache efficiency
+                        for (sPos.y = 0; sPos.y < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.y) {
+                            for (sPos.z = 0; sPos.z < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.z) {
+                                for (sPos.x = 0; sPos.x < ENKI_MI_NUM_SECTIONS_PER_CHUNK; ++sPos.x) {
+                                    uint8_t voxel = enkiGetChunkSectionVoxel(&aChunk, section, sPos);
+                                    auto p = ivec3(sPos.x, sPos.y, sPos.z) +
+                                             ivec3(sectionOrigin.x, sectionOrigin.y, sectionOrigin.z) - worldMin;
+                                    (*world)(p) = voxel;
 
+                                }
                             }
                         }
                     }
                 }
+                //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
+
+                enkiNBTRewind(&stream);
+                // PrintStreamStructureToFile(&stream, fpOutput);
             }
-            //fprintf(fpOutput, "   Chunk has %g non zero voxels\n", (float) numVoxels);
-
-            enkiNBTRewind(&stream);
-            // PrintStreamStructureToFile(&stream, fpOutput);
+            enkiNBTFreeAllocations(&stream);
         }
-        enkiNBTFreeAllocations(&stream);
+
+        enkiRegionFileFreeAllocations(&regionFile);
+
+
+        fclose(fp);
     }
-
-    enkiRegionFileFreeAllocations(&regionFile);
-
-
-    fclose(fp);
     return world;
 }
 
@@ -286,7 +299,7 @@ struct Renderer {
     bool needRedraw = true;
     uint32_t options = ENABLE_ATMOSPHERE_SCATTERING;
     float orbitDistance = 2.5f;
-
+    std::chrono::time_point<std::chrono::high_resolution_clock> lastRenderTime;
     enum CameraMode {
         Free,
         Orbit
@@ -433,6 +446,9 @@ struct Renderer {
             }
             auto M = rotate(eulerAngle.x, vec3(0, 1, 0));
             M *= rotate(eulerAngle.y, vec3(1, 0, 0));
+
+            std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - lastRenderTime;
+
             if (cameraMode == Orbit) {
                 auto tr = vec3(world->worldDimension) * 0.5f;
                 tr.z *= -1.0f;
@@ -440,11 +456,16 @@ struct Renderer {
                 cameraOrigin =
                         translate(vec3(tr.x, tr.y, -tr.z)) * cameraDirection *
                         translate(vec3(0, 0, orbitDistance * tr.z));
-            } else {
+            } else if (elapsed.count() > 1.0 / 30.0) {
+                lastRenderTime = std::chrono::high_resolution_clock::now();
                 // free
-                float step = 1.0f;
+                float vel = 6.0f;
+                float step = vel / 30.0;
                 vec3 o = cameraOrigin * vec4(0, 0, 0, 1);
                 auto R = rotate(eulerAngle.x, vec3(0, 1, 0));
+                if (io.KeyCtrl) {
+                    step *= 4.0f;
+                }
                 if (io.KeysDown['A']) {
                     o += vec3(step * R * vec4(-1, 0, 0, 1));
                     iTime = 0;
@@ -461,11 +482,11 @@ struct Renderer {
                     o += vec3(step * R * vec4(0, 0, -1, 1));
                     iTime = 0;
                 }
-                if (io.KeyCtrl) {
+                if (io.KeyShift) {
                     o += vec3(step * R * vec4(0, -1, 0, 1));
                     iTime = 0;
                 }
-                if (io.KeyShift) {
+                if (io.KeysDown[' ']) {
                     o += vec3(step * R * vec4(0, 1, 0, 1));
                     iTime = 0;
                 }
@@ -475,7 +496,9 @@ struct Renderer {
             prevMouseDown = pressed;
             lastFrameMousePos = ivec2(xpos, ypos);
         }
-        vec3 sunPos = vec3(0, cos(world->sunHeight) * 0.3 + 0.2, -1);
+        float theta = (world->sunHeight - M_PI_2);
+        float phi = world->sunPhi;
+        vec3 sunPos = normalize(vec3(cos(phi) * sin(theta), cos(theta), sin(phi) * sin(theta)));
         int w = 1280, h = 720;
         glUseProgram(program);
         glActiveTexture(GL_TEXTURE0 + 0);
@@ -514,6 +537,7 @@ struct Renderer {
         if (iTime % 200 == 0)
             printf("pass = %d\n", iTime);
         needRedraw = false;
+
     }
 };
 
@@ -566,9 +590,13 @@ struct Application {
         ImGui_ImplOpenGL3_Init("#version 430");
 
         renderer = std::make_unique<Renderer>();
-        renderer->world = McLoader("../data/r.-21.12.mca");
-        renderer->world->loadMinecraftMaterials();
+        std::vector<std::string> filenames;
+        for (auto &p: fs::directory_iterator("../data")) {
+            filenames.emplace_back(p.path().string());
+        }
         renderer->compileShader();
+        renderer->world = McLoader(filenames);
+        renderer->world->loadMinecraftMaterials();
         renderer->setUpWorld();
 
     }
@@ -592,6 +620,8 @@ struct Application {
                         auto &emission = renderer->world->materials.MaterialEmission[selectedMaterialIndex];
                         auto &emissionStrength = renderer->world->materials.MaterialEmissionStrength[selectedMaterialIndex];
                         auto &baseColor = renderer->world->materials.MaterialBaseColor[selectedMaterialIndex];
+                        auto &roughness = renderer->world->materials.MaterialRoughness[selectedMaterialIndex];
+                        auto &metallic = renderer->world->materials.MaterialMetallic[selectedMaterialIndex];
                         if (ImGui::ColorPicker3("Emission", (float *) &emission)) {
                             needRedraw = true;
                         }
@@ -599,6 +629,12 @@ struct Application {
                             needRedraw = true;
                         }
                         if (ImGui::ColorPicker3("Base Color", (float *) &baseColor)) {
+                            needRedraw = true;
+                        }
+                        if (ImGui::SliderFloat("Metallic", (float *) &metallic, 0.0f, 1.0f)) {
+                            needRedraw = true;
+                        }
+                        if (ImGui::SliderFloat("Roughness", (float *) &roughness, 0.0f, 1.0f)) {
                             needRedraw = true;
                         }
                     }
@@ -617,6 +653,11 @@ struct Application {
                     float theta = renderer->world->sunHeight / M_PI * 180.0;
                     if (ImGui::SliderFloat("Sun Height", &theta, 0.0f, 180.0f)) {
                         renderer->world->sunHeight = theta / 180.0f * M_PI;
+                        needRedraw = true;
+                    }
+                    float phi = renderer->world->sunPhi / M_PI * 180.0;
+                    if (ImGui::SliderFloat("Sun Direction", &phi, 0.0f, 360.0f)) {
+                        renderer->world->sunPhi = phi / 180.0f * M_PI;
                         needRedraw = true;
                     }
                     ImGui::EndTabItem();
@@ -1963,5 +2004,11 @@ void World::loadMinecraftMaterials() {
     for (int i = 1; i < MATERIAL_COUNT; i++) {
         materialNames[i] = gBlockDefinitions[i].name;
         materials.MaterialBaseColor[i] = hexToRGB(gBlockDefinitions[i].read_color);
+        materials.MaterialMetallic[i] = 0.0f;
+        materials.MaterialRoughness[i] = 0.01f;
     }
+    materials.MaterialRoughness[8] = 0.1;
+    materials.MaterialMetallic[8] = 0.75;
+    materials.MaterialRoughness[9] = 0.1;
+    materials.MaterialMetallic[9] = 0.75;
 }

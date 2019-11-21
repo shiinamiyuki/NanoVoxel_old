@@ -1,6 +1,4 @@
 const char * bsdfSource = R"(#line 1
-//https://schuttejoe.github.io/post/disneybsdf/
-
 float AbsCosTheta(vec3 w){
     return abs(w.y);
 }
@@ -12,7 +10,7 @@ float Cos2Theta(vec3 w){
 }
 
 float Sin2Theta(vec3 w){
-    return min(0.0, 1 - Cos2Theta(w));
+    return max(0.0, 1 - Cos2Theta(w));
 }
 float SinTheta(vec3 w){
     return sqrt(SinTheta(w));
@@ -49,89 +47,60 @@ float SchlickWeight(float cosTheta) {
 float Schlick(float R0, float cosTheta) {
     return mix(SchlickWeight(cosTheta), R0, 1.0);
 }
-vec3 evalTint(vec3 baseColor){
-    float luminance = dot(vec3(0.3,0.6,0.1), baseColor);
-    return luminance > 0.0 ? baseColor / luminance : vec3(1);
+float GGX_D(float alpha, const vec3 m) {
+    if (m.y <= 0.0f)
+        return 0.0f;
+    float a2 = alpha * alpha;
+    float c2 = Cos2Theta(m);
+    float t2 = Tan2Theta(m);
+    float at = (a2 + t2);
+    return a2 / (M_PI * c2 * c2 * at * at);
 }
 
-vec3 evalSheen(vec3 baseColor, float sheen, vec3 sheenTint, vec3 wo, vec3 wm, vec3 wi){
-    if(sheen <= 0.0){
+float GGX_G1(float alpha, const vec3 v, const vec3 m) {
+    if (dot(v, m) * v.y <= 0.0f) {
+        return 0.0f;
+    }
+    return 2.0 / (1.0 + sqrt(1.0 + alpha * alpha * Tan2Theta(m)));
+}
+float GGX_G(float alpha,const vec3 i, const vec3 o, const vec3 m) {
+    return GGX_G1(alpha,i, m) * GGX_G1(alpha,o, m);
+}
+vec3 GGX_SampleWh(float alpha, vec3 wo, vec2 u){
+    float phi = 2.0 * M_PI * u.y;
+    float t2 = alpha * alpha * u.x / (1.0 - u.x);
+	float cosTheta = 1.0f / sqrt(1.0 + t2);
+    float sinTheta = sqrt(max(0.0f, 1.0 - cosTheta * cosTheta));
+	return vec3(cos(phi) * sinTheta, cosTheta, sin(phi) * sinTheta);
+}
+float GGX_EvaluatePdf(float alpha, const vec3 wh) {
+    return GGX_D(alpha, wh) * AbsCosTheta(wh);
+}
+
+vec3 evaluateGlossy(vec3 R, float alpha, const vec3 wo, const vec3 wi){
+    if(wo.y * wi.y <= 0.0f){
         return vec3(0);
     }
-    float dotHL = dot(wm, wi);
-    vec3 tint = evalTint(baseColor);
-    return sheen * mix(vec3(1), tint, sheenTint) * SchlickWeight(dotHL);
+    float cosThetaO = AbsCosTheta(wo);
+    float cosThetaI = AbsCosTheta(wi);
+    vec3 wh = (wo + wi);
+    if (cosThetaI == 0 || cosThetaO == 0)return vec3(0);
+    if (wh.x == 0 && wh.y == 0 && wh.z == 0)return vec3(0);
+    wh = normalize(wh);
+    float F = 1.0f;// SchlickWeight(abs(dot(wi, wh)));
+    return max(vec3(0), R * F * GGX_D(alpha, wh) * GGX_G(alpha, wo, wi, wh)  / (4.0f * cosThetaI * cosThetaO));
 }
-
-float GTR1(float absDotHL, float a){
-    if(a >= 1.0) {
-        return M_1_PI;
-    }
-    float a2 = a * a;
-    return (a2 - 1.0f) / (M_PI * log2(a2) * (1.0f + (a2 - 1.0f) * absDotHL * absDotHL));
-}
-
-float SeparableSmithGGXG1(vec3 w, float a){
-    float a2 = a * a;
-    float absDotNV = AbsCosTheta(w);
-
-    return 2.0f / (1.0f + sqrt(a2 + (1.0 - a2) * absDotNV * absDotNV));
-}
-
-float EvaluateDisneyClearcoat(float clearcoat, float alpha, const vec3 wo, const vec3 wm,
-                                     const vec3 wi, out float fPdfW, out float rPdfW){
-    if(clearcoat <= 0.0f) {
+float evaluateGlossyPdf(float alpha, const vec3 wo, const vec3 wi)  {
+    if(wo.y * wi.y <= 0.0f){
         return 0.0f;
     }
-
-    float absDotNH = AbsCosTheta(wm);
-    float absDotNL = AbsCosTheta(wi);
-    float absDotNV = AbsCosTheta(wo);
-    float dotHL = dot(wm, wi);
-
-    float d = GTR1(absDotNH, mix(0.1f, 0.001f, alpha));
-    float f = Schlick(0.04f, dotHL);
-    float gl = SeparableSmithGGXG1(wi, 0.25f);
-    float gv = SeparableSmithGGXG1(wo, 0.25f);
-
-    fPdfW = d / (4.0f * absDotNL);
-    rPdfW = d / (4.0f * absDotNV);
-
-    return 0.25f * clearcoat * d * f * gl * gv;
+    vec3 wh = normalize(wi + wo);
+    return GGX_EvaluatePdf(alpha, wh) / (4.0f * dot(wo, wh));
 }
 
-float GgxAnisotropicD(const vec3 wm, float ax, float ay){
-    float dotHX2 = wm.x * wm.x;
-    float dotHY2 = wm.z * wm.z;
-    float cos2Theta = wm.y * wm.y;
-    float ax2 = ax * ax;
-    float ay2 = ay * ay;
-
-    float d = dotHX2 / ax2 + dotHY2 / ay2 + cos2Theta;
-    return 1.0f / (M_PI * ax * ay * d * d);
-}
-
-
-float SeparableSmithGGXG1(const vec3 w, const vec3 wm, float ax, float ay){
-    float dotHW = dot(w, wm);
-    if (dotHW <= 0.0f) {
-        return 0.0f;
-    }
-
-    float absTanTheta = abs(TanTheta(w));
-    if(isinf(absTanTheta)) {
-        return 0.0f;
-    }
-    float a = sqrt(Cos2Phi(w) * ax * ax + Sin2Phi(w) * ay * ay);
-    float a2Tan2Theta = (a * absTanTheta);
-    a2Tan2Theta *= a2Tan2Theta;
-
-    float lambda = 0.5f * (-1.0f + sqrt(1.0f + a2Tan2Theta));
-    return 1.0f / (1.0f + lambda);
-}
-
-float ThinTransmissionRoughness(float ior, float roughness){
-    return saturate((0.65f * ior - 0.35f) * roughness);
+void sampleGlossy(vec2 u, vec3 R, float alpha,vec3 wo, out vec3 wi){
+    vec3 wh = GGX_SampleWh(alpha, wo, u);
+    wi = reflect(-wo, wh);
 }
 
 )";

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.1)
 project(NanoVoxel)
 
 set(CMAKE_CXX_STANDARD 17)
-#set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -fopenmp)
+set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 
 include_directories(include/)
 include_directories(external/glfw/include)
@@ -15,4 +15,4 @@ add_subdirectory(external/glfw)
 file(GLOB IMGUI_SRC external/imgui/*.* external/imgui/examples/*.*)
 
 add_executable(NanoVoxel src/main.cpp src/gl3w.c src/enkimi.c src/miniz.c ${IMGUI_SRC})
-target_link_libraries(NanoVoxel glfw)
+target_link_libraries(NanoVoxel glfw stdc++fs)

@@ -1,4 +1,5 @@
-const char *computeShaderSource = R"(#line 1
+const char *computeShaderSource = R"(
+#line 1
 layout(local_size_x = 16, local_size_y = 16,local_size_z = 1) in;
 layout(binding = 0) uniform sampler3D world;
 layout(binding = 1, rgba32f)  uniform image2D accumlatedImage;
@@ -19,16 +20,15 @@ struct Material {
     vec3 emission;
     vec3 baseColor;
     float roughness;
-    float metalness;
-    float specular;
+    float metallic;
 };
+
 #define MATERIAL_COUNT 256
 layout(std430, binding = 4) readonly buffer Materials{
     vec4 MaterialEmission[MATERIAL_COUNT];
     vec4 MaterialBaseColor[MATERIAL_COUNT];
     float MaterialRoughness[MATERIAL_COUNT];
-    float MaterialBetalness[MATERIAL_COUNT];
-    float MaterialSpecular[MATERIAL_COUNT];
+    float MaterialMetallic[MATERIAL_COUNT];
     float MaterialEmissionStrength[MATERIAL_COUNT];
 };
 
@@ -119,6 +119,8 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 			isct.n = -sign(rd) * mask;
             isct.mat.baseColor = MaterialBaseColor[mat].rgb;
             isct.mat.emission = MaterialEmission[mat].rgb *  MaterialEmissionStrength[mat];
+            isct.mat.roughness = MaterialRoughness[mat] * MaterialRoughness[mat];
+            isct.mat.metallic = MaterialMetallic[mat];
 			return true;
 		}
 		if (tMax.x < tMax.y) {
@@ -165,6 +167,8 @@ bool intersect(vec3 ro, vec3 rd, out Intersection isct){
     isct.n = vec3(0,1,0);
     isct.mat.emission = vec3(0);
     isct.mat.baseColor = vec3(1);
+    isct.mat.metallic = 0.0f;
+    isct.mat.roughness = 0.01;
     return true;
 }
 
@@ -256,15 +260,27 @@ vec3 LiBackground(vec3 o, vec3 d){
         return vec3(0);
     }
 }
-
-vec3 sampleBSDF(const Material mat, out vec3 wi, out float pdf){
-    return vec3(0);
-}
 vec3 evaluateBSDF(const Material mat, const vec3 wo, const vec3 wi){
-    return vec3(0);
+    return mix(mat.baseColor * M_1_PI,evaluateGlossy(mat.baseColor, mat.roughness, wo, wi), mat.metallic);
 }
 float evaluatePdf(const Material mat, const vec3 wo, const vec3 wi){
-    return 0.0f;
+    return mix(AbsCosTheta(wi)* M_1_PI, evaluateGlossyPdf(mat.roughness, wo, wi),mat.metallic);
+}
+
+vec3 sampleBSDF(vec2 u, const Material mat, const vec3 wo, out vec3 wi, out float pdf){
+    float metallic = mat.metallic;
+    if(u.x < metallic){
+        u.x /= metallic;
+        sampleGlossy(u, mat.baseColor, mat.roughness, wo, wi);
+    }else{
+        u.x = (u.x - metallic) / (1.0 - metallic);
+        wi = cosineHemisphereSampling(u);
+        if(wi.y * wo.y  < 0.0){
+            wi.y = -wi.y;
+        }
+    }
+    pdf = evaluatePdf(mat, wo, wi);
+    return evaluateBSDF(mat, wo, wi);
 }
 
 //#define AO
@@ -288,11 +304,12 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
 }
 #else
 
-vec3 directLighting(Intersection isct, vec3 wo){
-    vec3 lightDir = normalize(vec3(0.1,1,0.1));
+vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
+    vec3 lightDir = sunPos;
     Intersection _;
+    vec3 wi = worldToLocal(lightDir, frame);
     if(!intersect(isct.p, lightDir, _)){
-        return  isct.mat.baseColor / M_PI * abs(dot(isct.n, lightDir));
+        return evaluateBSDF(isct.mat, wo, wi) * AbsCosTheta(wi);
     }
     return vec3(0);
 }
@@ -308,23 +325,19 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
             L += beta * LiBackground(o, d);
             break;
         }
-        if(depth == 0)
-            L += beta * isct.mat.emission;
+        L += beta * isct.mat.emission;
         LocalFrame frame;
         computeLocalFrame(isct.n, frame);
         vec3 wo = worldToLocal(-d, frame);
-        L += beta * directLighting(isct, wo);
-
-        vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
-        if(wo.y * wi.y <0.0f){
-            wi.y *= -1.0;
-        }
-        wi = localToWorld(wi, frame);
+        L += beta * directLighting(frame, isct, wo);
+        vec3 wi;
+        float pdf;
+        vec3 f = sampleBSDF(nextFloat2(sampler), isct.mat, wo, wi, pdf);
+        wi = normalize(localToWorld(wi, frame));
 
         o = isct.p;
         d = wi;
-        float pdf = abs(dot(isct.n, wi)) / M_PI;
-        beta *= isct.mat.baseColor / M_PI * abs(dot(isct.n, wi)) / pdf;
+        beta *= f * abs(dot(isct.n, wi)) / pdf;
         float p = maxComp(beta);
         if(nextFloat(sampler) > p){
             break;
