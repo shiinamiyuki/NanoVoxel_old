@@ -287,6 +287,16 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     return vec3(0);
 }
 #else
+
+vec3 directLighting(Intersection isct, vec3 wo){
+    vec3 lightDir = normalize(vec3(0.1,1,0.1));
+    Intersection _;
+    if(!intersect(isct.p, lightDir, _)){
+        return  isct.mat.baseColor / M_PI * abs(dot(isct.n, lightDir));
+    }
+    return vec3(0);
+}
+
 const int maxDepth = 5;
 vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     Intersection isct;
@@ -298,10 +308,13 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
             L += beta * LiBackground(o, d);
             break;
         }
-        L += beta * isct.mat.emission;
+        if(depth == 0)
+            L += beta * isct.mat.emission;
         LocalFrame frame;
         computeLocalFrame(isct.n, frame);
         vec3 wo = worldToLocal(-d, frame);
+        L += beta * directLighting(isct, wo);
+
         vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
         if(wo.y * wi.y <0.0f){
             wi.y *= -1.0;
@@ -312,6 +325,12 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
         d = wi;
         float pdf = abs(dot(isct.n, wi)) / M_PI;
         beta *= isct.mat.baseColor / M_PI * abs(dot(isct.n, wi)) / pdf;
+        float p = maxComp(beta);
+        if(nextFloat(sampler) > p){
+            break;
+        }else{
+            beta /= p;
+        }
     }
     return L;
 }
@@ -323,10 +342,11 @@ void main() {
     if(any(greaterThanEqual(gl_GlobalInvocationID.xy, iResolution)))
         return;
     ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
-    vec2 uv = pixelCoord.xy / iResolution;
     Sampler sampler;
     sampler.dimension = 0;
     sampler.seed = floatBitsToUint(imageLoad(seeds, pixelCoord).r);
+    vec2 uv = (pixelCoord.xy + nextFloat2(sampler)) / iResolution;
+
 
     uv = 2.0 * uv - vec2(1.0);
     uv.y *= -1.0f;
