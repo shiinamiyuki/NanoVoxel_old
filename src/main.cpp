@@ -2016,4 +2016,16 @@ void World::loadMinecraftMaterials() {
     materials.MaterialMetallic[8] = 0.75;
     materials.MaterialRoughness[9] = 0.1;
     materials.MaterialMetallic[9] = 0.75;
+
+    materials.MaterialRoughness[20] = 0.05;
+    materials.MaterialMetallic[20] = 0.95;
+
+    materials.MaterialRoughness[102] = 0.05;
+    materials.MaterialMetallic[102] = 0.95;
+
+    materials.MaterialRoughness[95] = 0.05;
+    materials.MaterialMetallic[95] = 0.95;
+
+    materials.MaterialRoughness[160] = 0.05;
+    materials.MaterialMetallic[160] = 0.95;
 }

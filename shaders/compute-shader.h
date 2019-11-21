@@ -155,8 +155,11 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 	}
     return false;
 }
-
+#define NO_PLANE
 bool intersect(vec3 ro, vec3 rd, out Intersection isct){
+#ifdef NO_PLANE
+    return intersect1(ro, rd,isct);
+#else
      float t = ro.y / -rd.y;
     if(intersect1(ro, rd,isct) && (t < RayBias || isct.t < t)){
         return true;
@@ -171,6 +174,7 @@ bool intersect(vec3 ro, vec3 rd, out Intersection isct){
     isct.mat.metallic = 0.0f;
     isct.mat.roughness = 0.01;
     return true;
+#endif
 }
 
 // Returns 2D random point in [0,1]²
@@ -261,11 +265,20 @@ vec3 LiBackground(vec3 o, vec3 d){
         return vec3(0);
     }
 }
+vec3 evaluateDiffuse(vec3 R,const vec3 wo, const vec3 wi){
+    if(wo.y * wi.y <=0.0f){
+        return vec3(0);
+    }
+    return R * M_1_PI;
+}
+float evaluateDiffusePdf(const vec3 wo, const vec3 wi){
+    return AbsCosTheta(wi) *  M_1_PI;
+}
 vec3 evaluateBSDF(const Material mat, const vec3 wo, const vec3 wi){
-    return mix(mat.baseColor * M_1_PI,evaluateGlossy(mat.baseColor, mat.roughness, wo, wi), mat.metallic);
+    return mix(evaluateDiffuse(mat.baseColor, wo, wi),evaluateGlossy(mat.baseColor, mat.roughness, wo, wi), mat.metallic);
 }
 float evaluatePdf(const Material mat, const vec3 wo, const vec3 wi){
-    return mix(AbsCosTheta(wi)* M_1_PI, evaluateGlossyPdf(mat.roughness, wo, wi),mat.metallic);
+    return mix(evaluateDiffusePdf(wo, wi), evaluateGlossyPdf(mat.roughness, wo, wi),mat.metallic);
 }
 
 vec3 sampleBSDF(vec2 u, const Material mat, const vec3 wo, out vec3 wi, out float pdf){
@@ -309,8 +322,10 @@ vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
     vec3 lightDir = sunPos;
     Intersection _;
     vec3 wi = worldToLocal(lightDir, frame);
-    if(!intersect(isct.p, lightDir, _)){
-        return evaluateBSDF(isct.mat, wo, wi) * AbsCosTheta(wi);
+    vec3 f = evaluateBSDF(isct.mat, wo, wi);
+    if(all(greaterThan(f,vec3(0))) &&!intersect(isct.p, lightDir, _)){
+        vec3 Ke = LiBackground(vec3(0), sunPos);
+        return Ke * f * AbsCosTheta(wi);
     }
     return vec3(0);
 }
@@ -369,7 +384,7 @@ void main() {
     float fov = 60.0 / 180.0 * M_PI;
     float z = 1.0 / tan(fov / 2.0);
     vec3 d = normalize(mat3(cameraDirection) * normalize(vec3(uv, z) - vec3(0,0,0)));
-    vec4 color = vec4(removeNaN(Li(o, d, sampler)), 1.0);
+    vec4 color = vec4(clamp(removeNaN(Li(o, d, sampler)), vec3(0), vec3(10)), 1.0);
     vec4 prevColor = imageLoad(accumlatedImage,  pixelCoord);
     if(iTime > 0)
         color += prevColor;

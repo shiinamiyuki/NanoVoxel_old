@@ -45,7 +45,7 @@ float SchlickWeight(float cosTheta) {
     return (m * m) * (m * m) * m;
 }
 float Schlick(float R0, float cosTheta) {
-    return mix(SchlickWeight(cosTheta), R0, 1.0);
+    return mix(R0, 1.0,  SchlickWeight(cosTheta));
 }
 float GGX_D(float alpha, const vec3 m) {
     if (m.y <= 0.0f)
@@ -87,7 +87,7 @@ vec3 evaluateGlossy(vec3 R, float alpha, const vec3 wo, const vec3 wi){
     if (cosThetaI == 0 || cosThetaO == 0)return vec3(0);
     if (wh.x == 0 && wh.y == 0 && wh.z == 0)return vec3(0);
     wh = normalize(wh);
-    float F = 1.0f;// SchlickWeight(abs(dot(wi, wh)));
+    float F = Schlick(0.4f, abs(dot(wi, wh)));
     return max(vec3(0), R * F * GGX_D(alpha, wh) * GGX_G(alpha, wo, wi, wh)  / (4.0f * cosThetaI * cosThetaO));
 }
 float evaluateGlossyPdf(float alpha, const vec3 wo, const vec3 wi)  {
