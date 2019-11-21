@@ -465,7 +465,7 @@ struct Renderer {
                 vec3 o = cameraOrigin * vec4(0, 0, 0, 1);
                 auto R = rotate(eulerAngle.x, vec3(0, 1, 0));
                 if (io.KeyCtrl) {
-                    step *= 4.0f;
+                    step *= 10.0f;
                 }
                 if (io.KeysDown['A']) {
                     o += vec3(step * R * vec4(-1, 0, 0, 1));
