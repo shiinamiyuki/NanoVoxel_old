@@ -293,6 +293,7 @@ struct Renderer {
     GLuint accum; // accumlated sample
     GLuint composed; // post processor
     ivec2 mousePos, prevMousePos, lastFrameMousePos;
+    int maxDepth = 2;
     bool prevMouseDown = false;
     int iTime = 0;
     vec2 eulerAngle = vec2(0, 0);
@@ -517,6 +518,7 @@ struct Renderer {
                     world->worldDimension.z);
         glUniform1i(glGetUniformLocation(program, "iTime"), iTime++);
         glUniform1ui(glGetUniformLocation(program, "options"), options);
+        glUniform1i(glGetUniformLocation(program, "maxDepth"), maxDepth);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraOrigin"), 1, GL_FALSE, &cameraOrigin[0][0]);
         glUniformMatrix4fv(glGetUniformLocation(program, "cameraDirection"), 1, GL_FALSE, &cameraDirection[0][0]);
         glUniform3fv(glGetUniformLocation(program, "sunPos"), 1, (float *) &sunPos);
@@ -641,6 +643,9 @@ struct Application {
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Render")) {
+                    if (ImGui::InputInt("Max Depth", &renderer->maxDepth)) {
+                        needRedraw = true;
+                    }
                     bool enable = renderer->options & ENABLE_ATMOSPHERE_SCATTERING;
                     if (ImGui::Checkbox("Atmospheric Scattering", &enable)) {
                         if (enable) {

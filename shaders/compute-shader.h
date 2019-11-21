@@ -12,6 +12,7 @@ uniform ivec3 worldDimension;
 uniform int iTime;
 uniform vec3 sunPos;
 uniform uint options;
+uniform int maxDepth;
 
 
 #define ENABLE_ATMOSPHERE_SCATTERING 0x1
@@ -314,7 +315,6 @@ vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
     return vec3(0);
 }
 
-const int maxDepth = 5;
 vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     Intersection isct;
     float tmax = 100.0f;
