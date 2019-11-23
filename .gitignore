@@ -35,3 +35,4 @@
 .vs/
 out/
 cmake-*/
+x64-Clang-Release/
