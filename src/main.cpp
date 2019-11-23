@@ -1,7 +1,7 @@
 //
 // Created by Shiina Miyuki on 11/18/2019.
 //
-
+#define _USE_MATH_DEFINES
 #include <GL/gl3w.h>
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
@@ -22,7 +22,9 @@
 #include <enkimi.h>
 #include <miniz.h>
 #include <optional>
+#include <cmath>
 #include <filesystem>
+
 
 namespace fs = std::filesystem;
 
@@ -530,9 +532,8 @@ struct Renderer {
             memcpy(p, &world->materials, sizeof(World::Materials));
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
-//        GLuint blockIndex = 0;
-//        blockIndex = glGetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "Materials");
-//        glShaderStorageBlockBinding(program, blockIndex, 4);
+
+
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, world->materialsSSBO);
         glDispatchCompute(std::ceil(w / 16), std::ceil(h / 16), 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);

@@ -86,7 +86,7 @@ bool insideWorld(vec3 p){
 int map(vec3 p){
     return int(texelFetch(world, ivec3(p), 0).r * 255.0);
 }
-
+#define USE_BRANCHLESS_DDA
 const float tFar = 500.0f;
 bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 {
@@ -124,6 +124,12 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
             isct.mat.metallic = MaterialMetallic[mat];
 			return true;
 		}
+#ifdef USE_BRANCHLESS_DDA
+        mask = step(tMax.xyz, tMax.yxy) * step(tMax.xyz, tMax.zzx);
+        p += stp * mask;
+        t = dot(tMax, mask);
+        tMax += delta * mask;
+#else
 		if (tMax.x < tMax.y) {
 			if (tMax.x < tMax.z) {
 				p.x += stp.x;
@@ -152,6 +158,7 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 				mask = vec3(0, 0, 1);
 			}
 		}
+#endif
 	}
     return false;
 }
