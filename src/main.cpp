@@ -295,6 +295,7 @@ struct Renderer {
     GLuint accum; // accumlated sample
     GLuint composed; // post processor
     ivec2 mousePos, prevMousePos, lastFrameMousePos;
+    float maxRayIntensity = 10.0f;
     int maxDepth = 2;
     bool prevMouseDown = false;
     int iTime = 0;
@@ -466,7 +467,7 @@ struct Renderer {
                 float step = vel / 30.0;
                 vec3 o = cameraOrigin * vec4(0, 0, 0, 1);
                 auto R = rotate(eulerAngle.x, vec3(0, 1, 0));
-                if (io.KeyCtrl) {
+                if (io.KeyShift) {
                     step *= 10.0f;
                 }
                 if (io.KeysDown['A']) {
@@ -485,7 +486,7 @@ struct Renderer {
                     o += vec3(step * R * vec4(0, 0, -1, 1));
                     iTime = 0;
                 }
-                if (io.KeyShift) {
+                if (io.KeyCtrl) {
                     o += vec3(step * R * vec4(0, -1, 0, 1));
                     iTime = 0;
                 }
@@ -513,6 +514,7 @@ struct Renderer {
         glBindTexture(GL_TEXTURE_2D, composed);
         glBindImageTexture(3, composed, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
         glUniform1i(glGetUniformLocation(program, "world"), 0);
+        glUniform1f(glGetUniformLocation(program, "maxRayIntensity"), maxRayIntensity);
         glUniform2f(glGetUniformLocation(program, "iResolution"), w, h);
         glUniform3i(glGetUniformLocation(program, "worldDimension"),
                     world->worldDimension.x,
@@ -533,10 +535,11 @@ struct Renderer {
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
 
-
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, world->materialsSSBO);
+
         glDispatchCompute(std::ceil(w / 16), std::ceil(h / 16), 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        glFinish();
         if (iTime % 200 == 0)
             printf("pass = %d\n", iTime);
         needRedraw = false;
@@ -645,6 +648,9 @@ struct Application {
                 }
                 if (ImGui::BeginTabItem("Render")) {
                     if (ImGui::InputInt("Max Depth", &renderer->maxDepth)) {
+                        needRedraw = true;
+                    }
+                    if (ImGui::InputFloat("Ray Clamp", &renderer->maxRayIntensity)) {
                         needRedraw = true;
                     }
                     bool enable = renderer->options & ENABLE_ATMOSPHERE_SCATTERING;

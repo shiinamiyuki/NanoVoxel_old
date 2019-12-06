@@ -13,6 +13,7 @@ uniform int iTime;
 uniform vec3 sunPos;
 uniform uint options;
 uniform int maxDepth;
+uniform float maxRayIntensity;
 
 
 #define ENABLE_ATMOSPHERE_SCATTERING 0x1
@@ -330,7 +331,7 @@ vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
     Intersection _;
     vec3 wi = worldToLocal(lightDir, frame);
     vec3 f = evaluateBSDF(isct.mat, wo, wi);
-    if(all(greaterThan(f,vec3(0))) &&!intersect(isct.p, lightDir, _)){
+    if(any(greaterThan(f,vec3(0))) &&!intersect(isct.p, lightDir, _)){
         vec3 Ke = LiBackground(vec3(0), sunPos);
         return Ke * f * AbsCosTheta(wi);
     }
@@ -391,7 +392,7 @@ void main() {
     float fov = 60.0 / 180.0 * M_PI;
     float z = 1.0 / tan(fov / 2.0);
     vec3 d = normalize(mat3(cameraDirection) * normalize(vec3(uv, z) - vec3(0,0,0)));
-    vec4 color = vec4(clamp(removeNaN(Li(o, d, sampler)), vec3(0), vec3(10)), 1.0);
+    vec4 color = vec4(clamp(removeNaN(Li(o, d, sampler)), vec3(0), vec3(maxRayIntensity)), 1.0);
     vec4 prevColor = imageLoad(accumlatedImage,  pixelCoord);
     if(iTime > 0)
         color += prevColor;
