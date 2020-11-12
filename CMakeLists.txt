@@ -14,5 +14,5 @@ add_subdirectory(external/glfw)
 
 file(GLOB IMGUI_SRC external/imgui/*.* external/imgui/examples/*.*)
 
-add_executable(NanoVoxel src/main.cpp src/gl3w.c src/enkimi.c src/miniz.c ${IMGUI_SRC})
-target_link_libraries(NanoVoxel glfw stdc++fs)
+add_executable(NanoVoxel src/mc.cpp src/main.cpp src/gl3w.c src/enkimi.c src/miniz.c ${IMGUI_SRC})
+target_link_libraries(NanoVoxel glfw)
