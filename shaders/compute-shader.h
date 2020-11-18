@@ -14,7 +14,7 @@ uniform vec3 sunPos;
 uniform uint options;
 uniform int maxDepth;
 uniform float maxRayIntensity;
-
+uniform int octreeRoot;
 
 #define ENABLE_ATMOSPHERE_SCATTERING 0x1
 
@@ -34,6 +34,17 @@ layout(std430, binding = 4) readonly buffer Materials{
     float MaterialEmissionStrength[MATERIAL_COUNT];
 };
 
+struct OctreeNode {
+    ivec3 pmin;
+    ivec3 pmax;
+    int children[8];
+    bool isLeaf;
+};
+
+layout(std430, binding = 5) readonly buffer Octree{
+    OctreeNode[] octree;
+};
+
 
 
 float maxComp(vec3 o){
@@ -46,6 +57,22 @@ bool fleq(float x, float y){
 	return abs(x - y) < 0.001;
 }
 const float RayBias = 1e-3f;
+float intersectBox(vec3 o, vec3 d, vec3 p1, vec3 p2){
+    vec3 t0 = (p1 - o)/d;
+    vec3 t1 = (p2 - o)/d;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    float t = maxComp(tmin);
+    if(t < minComp(tmax)){
+        t = max(t, 0.0);
+        if(t > minComp(tmax)){
+        	return -1.0;
+        }else{
+            return t;
+        }
+    }
+    return -1.0;
+}
 float intersectBox(vec3 o, vec3 d, vec3 p1, vec3 p2, out vec3 n){
 	vec3 t0 = (p1 - o)/d;
     vec3 t1 = (p2 - o)/d;
@@ -84,15 +111,18 @@ struct Intersection{
 bool insideWorld(vec3 p){
     return all(lessThan(p, vec3(worldDimension)+vec3(1))) && all(greaterThanEqual(p, vec3(-2)));
 }
+bool insideBox(vec3 p, ivec3 pmin, ivec3 pmax){
+    return all(lessThanEqual(p, vec3(pmax) + vec3(1))) && all(greaterThanEqual(p, vec3(pmin) - vec3(1)));
+}
 int map(vec3 p){
     return int(texelFetch(world, ivec3(p), 0).r * 255.0);
 }
 #define USE_BRANCHLESS_DDA
 const float tFar = 500.0f;
-bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
+bool intersect1(vec3 ro, vec3 rd, ivec3 pmin, ivec3 pmax, inout Intersection isct)
 {
     vec3 n;
-    float distance = intersectBox(ro, rd, vec3(-1.5), vec3(worldDimension)+vec3(0.5), n);
+    float distance = intersectBox(ro, rd, vec3(pmin), vec3(pmax), n);
     if(distance < 0.0){
         return false;
     }
@@ -108,9 +138,10 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
     isct.n = n;
 	vec3 mask = vec3(0, 0, 0);
 	float t = 0;
-    int maxIter = int(dot(worldDimension, ivec3(1)));
+    int maxIter = int(dot(pmax - pmin, ivec3(1)));
 	for (int i = 0; i < maxIter; ++i) {
-		if (!insideWorld(p)) {
+        // if(distance + t > isct.t + 1.0)break;
+		if (!insideBox(p,pmin - ivec3(1), pmax + ivec3(1))) {
 			break;
 		}
 		int mat = map(p);
@@ -163,13 +194,117 @@ bool intersect1(vec3 ro, vec3 rd, out Intersection isct)
 	}
     return false;
 }
+#define OCTREE_FOR(_x,_y,_z)\
+    for(int dx = 0; dx < 2;dx++){for(int dy = 0; dy < 2;dy++){for(int dz = 0; dz < 2;dz++){\
+        int x = _x;int y = _y; int z = _z;int i = 4 * z + 2 * y + x;\
+        if(node.children[i] >= 0){stack[sp++] = node.children[i];}}}}
+
+bool occlude(vec3 ro, vec3 rd){
+    int stack[64];
+    int sp = 1;
+    stack[0] = octreeRoot;
+    while(sp > 0){
+        OctreeNode node = octree[stack[--sp]];
+        ivec3 pmin = node.pmin - ivec3(1);
+        ivec3 pmax = node.pmax + ivec3(1);
+        
+        float t = intersectBox(ro, rd, vec3(pmin), vec3(pmax));
+        if(t < 0.0){
+            continue;
+        }
+        if(node.isLeaf){
+            Intersection tmp;
+            tmp.t = 1e8;
+            bool _hit = intersect1(ro, rd, pmin, pmax, tmp);
+            if(_hit){
+               return true;
+            }
+        } else {
+            bvec3 mask = lessThan(rd, vec3(0));
+            bvec2 tf = bvec2(true, false);
+            // if rd.x < 0, then push left first
+            if(all(equal(mask, tf.xxx))){
+                OCTREE_FOR(dx,dy,dz);
+            }else if(all(equal(mask, tf.yxx))){
+                OCTREE_FOR(1-dx,dy,dz);
+            }else if(all(equal(mask, tf.xyx))){
+                OCTREE_FOR(dx,1-dy,dz);
+            }else if(all(equal(mask, tf.yyx))){
+                OCTREE_FOR(1-dx,1-dy,dz);
+            }else if(all(equal(mask, tf.xxy))){
+                OCTREE_FOR(dx,dy,1-dz);
+            }else if(all(equal(mask, tf.yxy))){
+                OCTREE_FOR(1-dx,dy,1-dz);
+            }else if(all(equal(mask, tf.xyy))){
+                OCTREE_FOR(dx,1-dy,1-dz);
+            }else /*if(all(equal(mask, tf.yyy)))*/{
+                OCTREE_FOR(1-dx,1-dy,1-dz);
+            }
+        }
+    }
+    return false;
+}
+
+bool intersect2(vec3 ro, vec3 rd, inout Intersection isct){
+    bool hit = false;
+    int stack[64];
+    int sp = 1;
+    stack[0] = octreeRoot;
+    while(sp > 0){
+        OctreeNode node = octree[stack[--sp]];
+        ivec3 pmin = node.pmin - ivec3(1);
+        ivec3 pmax = node.pmax + ivec3(1);
+        
+        float t = intersectBox(ro, rd, vec3(pmin), vec3(pmax));
+        if(t < 0.0 || t > isct.t){
+            continue;
+        }
+        // return true;
+        if(node.isLeaf){
+            Intersection tmp;
+            tmp.t = isct.t;
+            bool _hit = intersect1(ro, rd, pmin, pmax, tmp);
+            if(_hit && tmp.t < isct.t){
+                isct = tmp;
+                hit = true;
+            }
+        } else {
+
+
+            bvec3 mask = lessThan(rd, vec3(0));
+            bvec2 tf = bvec2(true, false);
+            // if rd.x < 0, then push left first
+            if(all(equal(mask, tf.xxx))){
+                OCTREE_FOR(dx,dy,dz);
+            }else if(all(equal(mask, tf.yxx))){
+                OCTREE_FOR(1-dx,dy,dz);
+            }else if(all(equal(mask, tf.xyx))){
+                OCTREE_FOR(dx,1-dy,dz);
+            }else if(all(equal(mask, tf.yyx))){
+                OCTREE_FOR(1-dx,1-dy,dz);
+            }else if(all(equal(mask, tf.xxy))){
+                OCTREE_FOR(dx,dy,1-dz);
+            }else if(all(equal(mask, tf.yxy))){
+                OCTREE_FOR(1-dx,dy,1-dz);
+            }else if(all(equal(mask, tf.xyy))){
+                OCTREE_FOR(dx,1-dy,1-dz);
+            }else /*if(all(equal(mask, tf.yyy)))*/{
+                OCTREE_FOR(1-dx,1-dy,1-dz);
+            }
+            
+        }
+    }
+    return hit;
+}
+
 #define NO_PLANE
 bool intersect(vec3 ro, vec3 rd, out Intersection isct){
+    isct.t = 1e8;
 #ifdef NO_PLANE
-    return intersect1(ro, rd,isct);
+    return intersect2(ro, rd,  isct);
 #else
      float t = ro.y / -rd.y;
-    if(intersect1(ro, rd,isct) && (t < RayBias || isct.t < t)){
+    if(intersect2(ro, rd, isct) && (t < RayBias || isct.t < t)){
         return true;
     }
     if(t < RayBias)
@@ -313,6 +448,7 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
     if(!intersect(o, d, isct)){
         return LiBackground(o, d);
     }
+    
     LocalFrame frame;
     computeLocalFrame(isct.n, frame);
     vec3 wi = cosineHemisphereSampling(nextFloat2(sampler));
@@ -328,10 +464,9 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
 
 vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
     vec3 lightDir = sunPos;
-    Intersection _;
     vec3 wi = worldToLocal(lightDir, frame);
     vec3 f = evaluateBSDF(isct.mat, wo, wi);
-    if(any(greaterThan(f,vec3(0))) &&!intersect(isct.p, lightDir, _)){
+    if(any(greaterThan(f,vec3(0))) &&!occlude(isct.p, lightDir)){
         vec3 Ke = LiBackground(vec3(0), sunPos);
         return Ke * f * AbsCosTheta(wi);
     }
@@ -339,6 +474,7 @@ vec3 directLighting(LocalFrame frame, Intersection isct, vec3 wo){
 }
 
 vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
+    // return vec3(worldDimension - octree[octreeRoot].pmax);
     Intersection isct;
     float tmax = 100.0f;
     vec3 L = vec3(0);
@@ -348,6 +484,7 @@ vec3 Li(vec3 o, vec3 d, inout Sampler sampler) {
             L += beta * LiBackground(o, d);
             break;
         }
+        // return vec3(1);
         L += beta * isct.mat.emission;
         LocalFrame frame;
         computeLocalFrame(isct.n, frame);

@@ -51,7 +51,7 @@ void setUpDockSpace();
 struct OctreeNode {
     alignas(16) ivec3 pmin;
     alignas(16) ivec3 pmax;
-    int children[8] = {-1};
+    std::array<int, 8> children = {-1, -1,-1, -1,-1, -1,-1, -1};
     bool isLeaf = false;
 };
 struct Box3i {
@@ -69,7 +69,7 @@ struct World {
     int octreeRoot = -1;
     float sunHeight = 0.0f;
     float sunPhi = 0.0f;
-    static const int octreeWidth = 32;
+    static const int octreeWidth = 8;
 #define MATERIAL_COUNT 256
     struct Materials {
         vec4 MaterialEmission[MATERIAL_COUNT];
@@ -77,22 +77,28 @@ struct World {
         float MaterialRoughness[MATERIAL_COUNT] = {0};
         float MaterialMetallic[MATERIAL_COUNT] = {0};
         float MaterialEmissionStrength[MATERIAL_COUNT] = {1};
-    } materials;
-    std::string materialNames[MATERIAL_COUNT];
+    };
+    std::unique_ptr<Materials>materials;
+    std::vector<std::string> materialNames;
 
     void loadMinecraftMaterials();
     void buildOctree() {
+        // auto s = ivec3(glm::ceil(
+        //     glm::log(vec3(worldDimension) / vec3(octreeWidth)) / 3.0f));
+        // octree.reserve(s.x * s.y * s.z);
         octreeRoot = buildOctree(Box3i{ivec3(0), worldDimension}, 0).value();
         printf("%d octree nodes; root=%d\n", (int)octree.size(), octreeRoot);
-        auto box = Box3i{octree[octreeRoot].pmin,octree[octreeRoot].pmax};
-        printf("box %d %d %d to %d %d %d\n", box.pmin.x, box.pmin.y, box.pmin.z
-        , box.pmax.x, box.pmax.y, box.pmax.z);
+        auto box = Box3i{octree[octreeRoot].pmin, octree[octreeRoot].pmax};
+        printf("box %d %d %d to %d %d %d\n", box.pmin.x, box.pmin.y, box.pmin.z,
+               box.pmax.x, box.pmax.y, box.pmax.z);
     }
     std::optional<int> buildOctree(Box3i box, int level) {
         // if(level < 3)
-        // printf("building octree %d %d %d to %d %d %d\n", box.pmin.x, box.pmin.y, box.pmin.z
-        // , box.pmax.x, box.pmax.y, box.pmax.z);
+        // printf("building octree %d %d %d to %d %d %d\n", box.pmin.x,
+        // box.pmin.y, box.pmin.z , box.pmax.x, box.pmax.y, box.pmax.z);
         // printf("%d\n",level);
+        // printf("= box %d %d %d to %d %d %d\n", box.pmin.x, box.pmin.y,
+            //    box.pmin.z, box.pmax.x, box.pmax.y, box.pmax.z);
         if (glm::all(glm::lessThanEqual(box.size(), ivec3(octreeWidth)))) {
             // count how many ?
             size_t count = 0;
@@ -101,9 +107,9 @@ struct World {
             for (int z = box.pmin.z; z < box.pmax.z; z++) {
                 for (int y = box.pmin.y; y < box.pmax.y; y++) {
                     for (int x = box.pmin.x; x < box.pmax.x; x++) {
-                        if ((*this)(x, y, z) != 0) {
-                            pmin = min(pmin, ivec3(x,y,z));
-                            pmax = max(pmax, ivec3(x,y,z));
+                        if ((*this)(x, y, z) > 0) {
+                            pmin = min(pmin, ivec3(x, y, z));
+                            pmax = max(pmax, ivec3(x, y, z));
                             count++;
                         }
                     }
@@ -112,59 +118,116 @@ struct World {
             if (count == 0) {
                 return std::nullopt;
             }
+
             OctreeNode node;
-            node.pmax = pmax + ivec3(1);
-            node.pmin = pmin;
+
+            node.pmax = glm::min(box.pmax, pmax + ivec3(1));
+            node.pmin = glm::max(box.pmin, pmin);
+            auto box3 = Box3i{node.pmin, node.pmax};
+            // printf("-> box %d %d %d to %d %d %d\n", box3.pmin.x, box3.pmin.y,
+                //    box3.pmin.z, box3.pmax.x, box3.pmax.y, box3.pmax.z);
+            // node.pmax = box.pmax;
+            // node.pmin = box.pmax;
             node.isLeaf = true;
+            int nodeIndex = (int)octree.size();
             octree.push_back(node);
-            int nodeIndex = (int)(octree.size() - 1);
+
             return nodeIndex;
         }
         OctreeNode node;
         ivec3 pmin = ivec3(std::numeric_limits<int>::max());
         ivec3 pmax = ivec3(-std::numeric_limits<int>::max());
         int childCount = 0;
-        auto step = glm::max(ivec3(1), box.size() / 2);
+        auto step = glm::max(ivec3(1), (box.size() / 2) + ivec3(1));
+
         for (int dx = 0; dx < 2; dx++) {
             for (int dy = 0; dy < 2; dy++) {
                 for (int dz = 0; dz < 2; dz++) {
                     ivec3 _pmin = box.pmin + step * ivec3(dx, dy, dz);
-                    ivec3 _pmax = glm::min(worldDimension, _pmin + step);
+                    ivec3 _pmax = glm::min(box.pmax, _pmin + step);
                     if (glm::all(glm::equal(_pmin, _pmax))) {
                         continue;
                     }
                     auto child = buildOctree(Box3i{_pmin, _pmax}, level + 1);
-                    if (child) {
-                        pmin = min(pmin, octree[*child].pmin);
-                        pmax = max(pmax, octree[*child].pmax);
+
+                    if (child.has_value()) {
+                        if(*child < 0)
+                            abort();
+                        auto box2 = Box3i{_pmin, _pmax};
+                        pmin = min(pmin, octree.at(child.value()).pmin);
+                        pmax = max(pmax, octree.at(child.value()).pmax);
+                        auto box3 = Box3i{pmin, pmax};
+                        Box3i target{ivec3(0, 0, 135), ivec3(68, 16, 203)};
+                        // if (glm::all(glm::equal(target.pmin, box.pmin)) &&
+                        //     glm::all(glm::equal(target.pmax, box.pmax))) {
+                        //     printf("box %d %d %d to %d %d %d\n", box.pmin.x,
+                        //            box.pmin.y, box.pmin.z, box.pmax.x,
+                        //            box.pmax.y, box.pmax.z);
+                        //     printf("box2 %d %d %d to %d %d %d\n", box2.pmin.x,
+                        //            box2.pmin.y, box2.pmin.z, box2.pmax.x,
+                        //            box2.pmax.y, box2.pmax.z);
+                        //     printf("box3 %d %d %d to %d %d %d\n", box3.pmin.x,
+                        //            box3.pmin.y, box3.pmin.z, box3.pmax.x,
+                        //            box3.pmax.y, box3.pmax.z);
+                        // }
+
                         childCount++;
                         node.children[dz * 4 + dy * 2 + dx] = *child;
                     }
                 }
             }
         }
-        node.pmin = box.pmin;
-        node.pmax = box.pmax;
+        if (childCount > 0 && glm::any(glm::greaterThan(Box3i{pmin, pmax}.size(), box.size()))) {
+            // printf("box %d %d %d to %d %d %d\n", box.pmin.x, box.pmin.y,
+            //        box.pmin.z, box.pmax.x, box.pmax.y, box.pmax.z);
+            // printf("box2 %d %d %d to %d %d %d\n", pmin.x, pmin.y, pmin.z,
+            //        pmax.x, pmax.y, pmax.z);
+            // for (int i = 0; i < 8; i++) {
+            //     if (node.children[i] >= 0) {
+            //         auto _pmin = octree[node.children[i]].pmin;
+            //         auto _pmax = octree[node.children[i]].pmax;
+            //         printf("box %d %d %d to %d %d %d\n", _pmin.x, _pmin.y,
+            //                _pmin.z, _pmax.x, _pmax.y, _pmax.z);
+            //     }
+            // }
+            abort();
+        } else {
+            node.pmin = pmin;
+            node.pmax = pmax;
+        }
         if (childCount == 0) {
-            if(level == 0){
+            if (level == 0) {
                 node.pmin = vec3(0);
                 node.pmax = worldDimension;
                 node.isLeaf = true;
-                octree.push_back(node); 
-                int nodeIndex = (int)(octree.size() - 1);
+                int nodeIndex = (int)octree.size();
+                octree.push_back(node);
                 return nodeIndex;
             }
             return std::nullopt;
         } else if (childCount == 1) {
             for (auto i : node.children) {
-                if (i != -1) {
+                if (i >= 0) {
+                    // auto node = octree[i];
+                    // auto box3 = Box3i{node.pmin, node.pmax};
+                    // printf("-> box %d %d %d to %d %d %d\n", box3.pmin.x,
+                    //        box3.pmin.y, box3.pmin.z, box3.pmax.x, box3.pmax.y,
+                    //        box3.pmax.z);
                     return i;
                 }
             }
-            abort();
         } else {
+            Box3i box{pmin, pmax};
+            if (glm::all(glm::lessThanEqual(box.size(), ivec3(64)))) {
+                if (childCount >= 5) {
+                    node.isLeaf = true;
+                }
+            }
+            // auto box3 = Box3i{node.pmin, node.pmax};
+            // printf("-> box %d %d %d to %d %d %d\n", box3.pmin.x, box3.pmin.y,
+            //        box3.pmin.z, box3.pmax.x, box3.pmax.y, box3.pmax.z);
+            int nodeIndex = (int)octree.size();
             octree.push_back(node);
-            int nodeIndex = (int)(octree.size() - 1);
             return nodeIndex;
         }
     }
@@ -199,11 +262,11 @@ struct World {
         glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Materials), NULL,
                      GL_DYNAMIC_COPY);
         glGenBuffers(1, &octreeBuffer);
-
     }
 
     explicit World(const ivec3 &worldDimension)
-        : worldDimension(worldDimension) {
+        : worldDimension(worldDimension),materials (new Materials()) {
+        materialNames.resize(MATERIAL_COUNT);
         alignedDimension = worldDimension;
         alignedDimension.x = (alignedDimension.x + 7U) & (-4U);
         data.resize(
@@ -233,7 +296,8 @@ struct World {
                      alignedDimension.y, alignedDimension.z, 0, GL_RED,
                      GL_UNSIGNED_BYTE, data.data());
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, octreeBuffer);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(OctreeNode) * octree.size(), octree.data(),
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+                     sizeof(OctreeNode) * octree.size(), octree.data(),
                      GL_DYNAMIC_COPY);
     }
 };
@@ -646,7 +710,8 @@ struct Renderer {
         glBindTexture(GL_TEXTURE_2D, composed);
         glBindImageTexture(3, composed, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                            GL_RGBA32F);
-        glUniform1i(glGetUniformLocation(program, "octreeRoot"), world->octreeRoot);
+        glUniform1i(glGetUniformLocation(program, "octreeRoot"),
+                    world->octreeRoot);
         glUniform1i(glGetUniformLocation(program, "world"), 0);
         glUniform1f(glGetUniformLocation(program, "maxRayIntensity"),
                     maxRayIntensity);
@@ -668,7 +733,7 @@ struct Renderer {
             // printf("redraw\n");
 
             GLvoid *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
-            memcpy(p, &world->materials, sizeof(World::Materials));
+            memcpy(p, world->materials.get(), sizeof(World::Materials));
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
 
@@ -766,19 +831,19 @@ struct Application {
                     if (selectedMaterialIndex != 0) {
                         auto &emission =
                             renderer->world->materials
-                                .MaterialEmission[selectedMaterialIndex];
+                                ->MaterialEmission[selectedMaterialIndex];
                         auto &emissionStrength =
-                            renderer->world->materials.MaterialEmissionStrength
+                            renderer->world->materials->MaterialEmissionStrength
                                 [selectedMaterialIndex];
                         auto &baseColor =
                             renderer->world->materials
-                                .MaterialBaseColor[selectedMaterialIndex];
+                                ->MaterialBaseColor[selectedMaterialIndex];
                         auto &roughness =
                             renderer->world->materials
-                                .MaterialRoughness[selectedMaterialIndex];
+                                ->MaterialRoughness[selectedMaterialIndex];
                         auto &metallic =
                             renderer->world->materials
-                                .MaterialMetallic[selectedMaterialIndex];
+                                ->MaterialMetallic[selectedMaterialIndex];
                         if (ImGui::ColorPicker3("Emission",
                                                 (float *)&emission)) {
                             needRedraw = true;
@@ -963,25 +1028,25 @@ extern float minecraftTexture[];
 void World::loadMinecraftMaterials() {
     for (int i = 1; i < MATERIAL_COUNT; i++) {
         materialNames[i] = gBlockDefinitions[i].name;
-        materials.MaterialBaseColor[i] =
+        materials->MaterialBaseColor[i] =
             hexToRGB(gBlockDefinitions[i].read_color);
-        materials.MaterialMetallic[i] = 0.0f;
-        materials.MaterialRoughness[i] = 0.01f;
+        materials->MaterialMetallic[i] = 0.0f;
+        materials->MaterialRoughness[i] = 0.01f;
     }
-    materials.MaterialRoughness[8] = 0.1;
-    materials.MaterialMetallic[8] = 0.75;
-    materials.MaterialRoughness[9] = 0.1;
-    materials.MaterialMetallic[9] = 0.75;
+    materials->MaterialRoughness[8] = 0.1;
+    materials->MaterialMetallic[8] = 0.75;
+    materials->MaterialRoughness[9] = 0.1;
+    materials->MaterialMetallic[9] = 0.75;
 
-    materials.MaterialRoughness[20] = 0.05;
-    materials.MaterialMetallic[20] = 0.95;
+    materials->MaterialRoughness[20] = 0.05;
+    materials->MaterialMetallic[20] = 0.95;
 
-    materials.MaterialRoughness[102] = 0.05;
-    materials.MaterialMetallic[102] = 0.95;
+    materials->MaterialRoughness[102] = 0.05;
+    materials->MaterialMetallic[102] = 0.95;
 
-    materials.MaterialRoughness[95] = 0.05;
-    materials.MaterialMetallic[95] = 0.95;
+    materials->MaterialRoughness[95] = 0.05;
+    materials->MaterialMetallic[95] = 0.95;
 
-    materials.MaterialRoughness[160] = 0.05;
-    materials.MaterialMetallic[160] = 0.95;
+    materials->MaterialRoughness[160] = 0.05;
+    materials->MaterialMetallic[160] = 0.95;
 }
